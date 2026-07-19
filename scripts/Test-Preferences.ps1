@@ -29,6 +29,12 @@ function Invoke-Bridge {
     return $response
 }
 
+function ConvertTo-ComparablePath([string]$Path) {
+    $value = $Path
+    if ($value.StartsWith('\\?\', [StringComparison]::Ordinal)) { $value = $value.Substring(4) }
+    return [IO.Path]::GetFullPath($value).TrimEnd('\')
+}
+
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "CdxVidExt-Preferences-$([guid]::NewGuid())"
 $flightRoot = Join-Path $testRoot 'flights'
 $snapshotRoot = Join-Path $testRoot 'snapshots'
@@ -110,9 +116,10 @@ try {
 
     $frame = (Invoke-Bridge frame $sessionId 0).data
     if (-not (Test-Path -LiteralPath $frame.image_path)) { throw 'A readable PNG snapshot was not produced.' }
-    $canonicalSnapshotRoot = (Resolve-Path -LiteralPath $snapshotRoot).Path
-    $canonicalSnapshot = (Resolve-Path -LiteralPath $frame.image_path).Path
-    if (-not $canonicalSnapshot.StartsWith($canonicalSnapshotRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    $canonicalSnapshotRoot = ConvertTo-ComparablePath $snapshotRoot
+    $canonicalSnapshot = ConvertTo-ComparablePath $frame.image_path
+    $expectedPrefix = "$canonicalSnapshotRoot\"
+    if (-not $canonicalSnapshot.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The extracted PNG was not stored under the selected snapshot root.'
     }
 
