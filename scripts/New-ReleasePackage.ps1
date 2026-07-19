@@ -12,7 +12,6 @@ $downloads = Join-Path $repo 'runtime-downloads'
 $staging = Join-Path $repo 'release-staging'
 $assetName = "FlightRecorder-v$version-Windows-x64.zip"
 
-if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'Build-Plugin.ps1') -SkipValidation:$SkipPluginValidation }
 New-Item -ItemType Directory -Path $dist, $downloads -Force | Out-Null
 if (Test-Path -LiteralPath $staging) {
     $resolved = (Resolve-Path -LiteralPath $staging).Path
@@ -30,6 +29,15 @@ $expanded = Join-Path $staging '_ffmpeg'
 Expand-Archive -LiteralPath $archive -DestinationPath $expanded -Force
 $ffmpegRoot = Get-ChildItem -LiteralPath $expanded -Directory | Select-Object -First 1
 if (-not $ffmpegRoot) { throw 'FFmpeg archive did not contain a root directory' }
+if (-not $SkipBuild) {
+    $priorPath = $env:PATH
+    $env:PATH = "$(Join-Path $ffmpegRoot.FullName 'bin');$priorPath"
+    try {
+        & (Join-Path $PSScriptRoot 'Build-Plugin.ps1') -SkipValidation:$SkipPluginValidation
+    } finally {
+        $env:PATH = $priorPath
+    }
+}
 $runtime = Join-Path $staging "runtime\ffmpeg\$ffmpegVersion"
 New-Item -ItemType Directory -Path (Join-Path $runtime 'bin') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $ffmpegRoot.FullName 'bin\ffmpeg.exe') -Destination (Join-Path $runtime 'bin\ffmpeg.exe')
