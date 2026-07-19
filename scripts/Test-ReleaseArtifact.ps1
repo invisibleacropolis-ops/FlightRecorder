@@ -34,7 +34,14 @@ try {
         if ($signature.Status -ne 'NotSigned') { throw "$executable must be an explicitly unsigned preview artifact." }
     }
 
-    $forbidden = & rg -a -n 'C:\\Users\\docwh|C:\\GITHUB\\CdxVidExt|plugins\\cdxvidext' $testRoot 2>&1
+    $scanTargets = @(
+        (Join-Path $testRoot 'plugins'),
+        (Join-Path $testRoot '.agents'),
+        (Join-Path $testRoot 'Install-FlightRecorder.ps1'),
+        (Join-Path $testRoot 'Uninstall-FlightRecorder.ps1'),
+        (Join-Path $testRoot 'BUILDINFO.json')
+    )
+    $forbidden = & rg -a -l 'C:\\Users\\|C:\\GITHUB\\|plugins\\cdxvidext' @scanTargets 2>&1
     if ($LASTEXITCODE -eq 0) { $forbidden; throw 'Development-machine path found in the release package.' }
     if ($LASTEXITCODE -ne 1) { throw 'Release package path scan failed.' }
 

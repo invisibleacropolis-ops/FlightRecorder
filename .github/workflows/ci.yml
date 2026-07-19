@@ -33,7 +33,7 @@ jobs:
       - name: Reject development-machine paths
         shell: pwsh
         run: |
-          $matches = rg -a -n 'C:\\Users\\docwh|C:\\GITHUB\\CdxVidExt|plugins\\cdxvidext' plugins Install-FlightRecorder.ps1 Uninstall-FlightRecorder.ps1
+          $matches = rg -a -l 'C:\\Users\\|C:\\GITHUB\\|plugins\\cdxvidext' plugins Install-FlightRecorder.ps1 Uninstall-FlightRecorder.ps1
           if ($LASTEXITCODE -eq 0) { $matches; throw 'Development path found in distributable content' }
           if ($LASTEXITCODE -ne 1) { throw 'Path scan failed' }
       - name: Upload plugin artifact
