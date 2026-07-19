@@ -1,0 +1,29 @@
+[package]
+name = "cdxvidext-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.5.5", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+axum = "0.8.8"
+base64.workspace = true
+cdxvidext-core = { path = "../../crates/core" }
+chrono.workspace = true
+mime_guess = "2.0.5"
+rfd = "0.15.4"
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-global-shortcut = "2.3.2"
+tokio.workspace = true
+tower = "0.5.3"
+tower-http = { version = "0.6.8", features = ["cors", "fs", "trace"] }
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true

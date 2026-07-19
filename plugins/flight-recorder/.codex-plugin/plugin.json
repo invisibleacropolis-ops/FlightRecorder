@@ -1,0 +1,45 @@
+{
+  "name": "flight-recorder",
+  "version": "0.2.0-preview.1",
+  "description": "Record and review local Codex flights with screen, input, action, and exact-frame evidence.",
+  "author": {
+    "name": "Invisible Acropolis",
+    "url": "https://github.com/invisibleacropolis-ops"
+  },
+  "homepage": "https://github.com/invisibleacropolis-ops/FlightRecorder",
+  "repository": "https://github.com/invisibleacropolis-ops/FlightRecorder",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "windows",
+    "screen-recording",
+    "flight-recorder",
+    "evidence",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Flight Recorder",
+    "shortDescription": "Record and inspect local Codex flights",
+    "longDescription": "Arm a monitor, automatically record Codex turns, navigate a friendly color-coded board of observed Windows activity, pause on exact captured frames, and hand off a visible stack of shared screenshots through MCP while retaining the complete raw debug timeline.",
+    "developerName": "Invisible Acropolis",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Open my recorder and show its current status",
+      "Find visual evidence from my latest recorded session"
+    ],
+    "brandColor": "#5EE6A8",
+    "websiteURL": "https://github.com/invisibleacropolis-ops/FlightRecorder",
+    "privacyPolicyURL": "https://github.com/invisibleacropolis-ops/FlightRecorder/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/invisibleacropolis-ops/FlightRecorder/blob/main/TERMS.md",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/composer-icon.svg",
+    "screenshots": ["./assets/flight-recorder.png"]
+  }
+}

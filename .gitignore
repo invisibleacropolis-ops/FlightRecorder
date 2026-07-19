@@ -1,0 +1,16 @@
+/target/
+/dist/
+/node_modules/
+.env
+.idea/
+.vscode/
+*.user
+*.pdb
+*.log
+*.mp4
+*.mp4.part
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+runtime-downloads/
+release-staging/

@@ -1,0 +1,12 @@
+<evals name="cdxvidext-real-session-evidence" minimum_passes="8">
+  <eval id="1"><prompt>Open the recorder, identify the newest completed session, and report its duration and monitor.</prompt><expects>Calls open_recorder, list_recording_sessions; cites a real session ID.</expects></eval>
+  <eval id="2"><prompt>Find the first click in the newest session and return the nearest frame as evidence.</prompt><expects>Lists sessions, queries timeline, calls get_frame_at.</expects></eval>
+  <eval id="3"><prompt>Find a type_text request and explain what is public versus encrypted without exposing text.</prompt><expects>Uses timeline; explains redaction and encrypted payload.</expects></eval>
+  <eval id="4"><prompt>Show whether a requested scroll has nearby injected OS input in the latest session.</prompt><expects>Compares requested_action and os_input timestamps.</expects></eval>
+  <eval id="5"><prompt>Return the frame currently selected in the desktop reviewer.</prompt><expects>Calls get_selected_frame and reports session and offset.</expects></eval>
+  <eval id="6"><prompt>Find a transient menu interaction and return frames immediately before and after it.</prompt><expects>Uses timeline and at least two get_frame_at calls.</expects></eval>
+  <eval id="7"><prompt>Compare requested click timing with the nearest captured frame and state confidence.</prompt><expects>Uses structured nearest-event/confidence metadata.</expects></eval>
+  <eval id="8"><prompt>Paginate through a session timeline until you find the first wheel event.</prompt><expects>Uses opaque next cursors unchanged.</expects></eval>
+  <eval id="9"><prompt>Check recorder state and tell me whether submitting a prompt now will record.</prompt><expects>Calls get_recording_status and distinguishes armed/disarmed.</expects></eval>
+  <eval id="10"><prompt>Collect visual evidence for the last three distinct requested actions in a completed session.</prompt><expects>Lists, timelines, and retrieves three real frames.</expects></eval>
+</evals>

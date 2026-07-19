@@ -1,0 +1,43 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install pinned FFmpeg runtime
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-essentials_build.zip'
+          Invoke-WebRequest $url -OutFile ffmpeg.zip
+          $hash = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne 'db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec') { throw 'FFmpeg hash mismatch' }
+          Expand-Archive ffmpeg.zip ffmpeg
+          $bin = (Get-ChildItem ffmpeg -Directory | Select-Object -First 1).FullName + '\bin'
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Check and test real Windows integrations
+        run: |
+          cargo check --workspace
+          cargo test --workspace
+      - name: Build static-CRT release plugin
+        shell: pwsh
+        run: .\scripts\Build-Plugin.ps1 -SkipTests -SkipValidation
+      - name: Reject development-machine paths
+        shell: pwsh
+        run: |
+          $matches = rg -a -n 'C:\\Users\\docwh|C:\\GITHUB\\CdxVidExt|plugins\\cdxvidext' plugins Install-FlightRecorder.ps1 Uninstall-FlightRecorder.ps1
+          if ($LASTEXITCODE -eq 0) { $matches; throw 'Development path found in distributable content' }
+          if ($LASTEXITCODE -ne 1) { throw 'Path scan failed' }
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flight-recorder-plugin-windows-x64
+          path: plugins/flight-recorder

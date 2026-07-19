@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flight Recorder</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/htmx.min.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Flight Recorder home"><span class="brand-mark">FR</span><span><b>Flight Recorder</b></span></a>
+    <div id="status" class="statusbar" hx-get="/partials/status" hx-trigger="load, every 1s" hx-swap="innerHTML"></div>
+  </header>
+  <main class="workspace">
+    <aside class="flight-index">
+      <div class="panel-heading"><div class="archive-heading"><span class="eyebrow">Local archive</span><h1>Recorded flights</h1></div><button class="archive-flip" data-toggle-archive aria-expanded="true" aria-label="Collapse recorded flights"><span>◀</span></button></div>
+      <div id="sessions" hx-get="/partials/sessions" hx-trigger="load, refresh, every 5s" hx-swap="innerHTML"></div>
+      <footer class="storage-note"><span>Storage</span><code>%LOCALAPPDATA%\CdxVidExt</code><button class="text-button" data-open-preferences>Preferences</button></footer>
+    </aside>
+    <section class="review-stage">
+      <div class="handoff-bar"><button class="button share" data-share-screenshot disabled>Share screenshot</button><section id="share-tray" class="share-dock" hx-get="/partials/shared" hx-trigger="load, refreshShared" hx-swap="outerHTML"><div class="share-empty"><span>Loading shared screenshots…</span></div></section></div>
+      <section id="reviewer" class="reviewer">
+        <div class="review-empty"><div class="radar"><span></span></div><span class="eyebrow">Evidence viewer</span><h2>Select a recorded flight</h2><p>Choose an observed event, inspect its paused frame, then share the screenshot with Codex.</p><kbd>Ctrl Alt Shift F12</kbd><small>emergency stop</small></div>
+      </section>
+    </section>
+  </main>
+  <dialog id="shared-frame-dialog" class="frame-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Close preview">×</button></form>
+    <img alt="Shared frame preview">
+    <footer><div><span class="eyebrow">Shared frame</span><strong data-dialog-time></strong></div><div><span data-dialog-event></span><code data-dialog-session></code></div></footer>
+  </dialog>
+  <dialog id="preferences-dialog" class="preferences-dialog" aria-label="Flight Recorder preferences">
+    <div id="preferences-content"><div class="preferences-loading">Loading preferences…</div></div>
+  </dialog>
+  <dialog id="consent-dialog" class="consent-dialog" aria-labelledby="consent-title">
+    <section>
+      <span class="eyebrow">Before your first flight</span>
+      <h2 id="consent-title">Review local capture and privacy</h2>
+      <p>Flight Recorder creates a video of the selected screen. The MP4 is stored locally and is not encrypted.</p>
+      <p>While a flight is recording, keyboard and mouse observations are system-wide. Recognized sensitive semantic text is protected with AES-GCM and Windows DPAPI, but visible text may still appear in the unencrypted video.</p>
+      <p>Evidence stays on this computer unless you explicitly export or share a snapshot. Retention can be configured in Preferences, and <kbd>Ctrl Alt Shift F12</kbd> stops an active flight.</p>
+      <label class="consent-check"><input type="checkbox" data-consent-checkbox> I understand what will be captured and how it is stored.</label>
+      <div class="consent-actions"><a href="https://github.com/invisibleacropolis-ops/FlightRecorder/blob/main/PRIVACY.md" target="_blank" rel="noreferrer">Read privacy policy</a><button class="button" type="button" data-accept-consent disabled>Accept and continue</button></div>
+      <p class="form-error" data-consent-error role="alert" hidden></p>
+    </section>
+  </dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

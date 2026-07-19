@@ -1,0 +1,54 @@
+name: Build draft preview release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Draft prerelease tag
+        required: true
+        default: v0.2.0-preview.1
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  package:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and package the preview
+        shell: pwsh
+        run: .\scripts\New-ReleasePackage.ps1 -SkipPluginValidation
+      - name: Verify exact release artifact
+        shell: pwsh
+        run: .\scripts\Test-ReleaseArtifact.ps1
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/FlightRecorder-v0.2.0-preview.1-Windows-x64.zip
+            dist/cdxvidext-bridge.exe
+            dist/cdxvidext-desktop.exe
+      - name: Create or update draft prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: Flight Recorder 0.2.0 Preview 1
+          draft: true
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist/FlightRecorder-v0.2.0-preview.1-Windows-x64.zip
+            dist/cdxvidext-bridge.exe
+            dist/cdxvidext-desktop.exe
+            dist/SHA256SUMS.txt
+            dist/BUILDINFO.json
+            dist/FFmpeg-8.1.2-LICENSE.txt
+            dist/FFmpeg-8.1.2-README.txt
+            dist/THIRD_PARTY_NOTICES.md

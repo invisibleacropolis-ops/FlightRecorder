@@ -1,0 +1,20 @@
+{
+  "name": "flight-recorder",
+  "interface": {
+    "displayName": "Flight Recorder"
+  },
+  "plugins": [
+    {
+      "name": "flight-recorder",
+      "source": {
+        "source": "local",
+        "path": "./plugins/flight-recorder"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

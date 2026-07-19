@@ -1,0 +1,56 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/cdxvidext-bridge.exe\" hook",
+            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\cdxvidext-bridge.exe\" hook",
+            "timeout": 2,
+            "statusMessage": "Starting armed flight recorder"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__node_repl__js$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/cdxvidext-bridge.exe\" hook",
+            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\cdxvidext-bridge.exe\" hook",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__node_repl__js$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/cdxvidext-bridge.exe\" hook",
+            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\cdxvidext-bridge.exe\" hook",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/cdxvidext-bridge.exe\" hook",
+            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\cdxvidext-bridge.exe\" hook",
+            "timeout": 6,
+            "statusMessage": "Finalizing recorded flight"
+          }
+        ]
+      }
+    ]
+  }
+}

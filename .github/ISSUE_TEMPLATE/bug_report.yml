@@ -1,0 +1,31 @@
+name: Bug report
+description: Report a reproducible Flight Recorder problem without private evidence
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach recordings, decrypted input, keys, or private screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: Flight Recorder version
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Windows, display, GPU, and Codex environment
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true

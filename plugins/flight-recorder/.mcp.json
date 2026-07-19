@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cdxvidext": {
+      "command": ".\\bin\\cdxvidext-bridge.exe",
+      "args": ["mcp"],
+      "cwd": ".",
+      "startup_timeout_sec": 10
+    }
+  }
+}
