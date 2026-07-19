@@ -51,6 +51,7 @@ Copy-Item -LiteralPath (Join-Path $repo '.agents\plugins\marketplace.json') -Des
 Copy-Item -LiteralPath (Join-Path $repo 'plugins\flight-recorder') -Destination (Join-Path $staging 'plugins\flight-recorder') -Recurse
 Copy-Item -LiteralPath (Join-Path $repo 'Install-FlightRecorder.ps1') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repo 'Uninstall-FlightRecorder.ps1') -Destination $staging
+Copy-Item -LiteralPath (Join-Path $repo 'scripts\Collect-Diagnostics.ps1') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repo 'PRIVACY.md') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repo 'TERMS.md') -Destination $staging

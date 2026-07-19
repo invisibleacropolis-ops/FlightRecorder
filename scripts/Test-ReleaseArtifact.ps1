@@ -39,6 +39,7 @@ try {
         (Join-Path $testRoot '.agents'),
         (Join-Path $testRoot 'Install-FlightRecorder.ps1'),
         (Join-Path $testRoot 'Uninstall-FlightRecorder.ps1'),
+        (Join-Path $testRoot 'Collect-Diagnostics.ps1'),
         (Join-Path $testRoot 'BUILDINFO.json')
     )
     $forbidden = & rg -a -l 'C:\\Users\\|C:\\GITHUB\\|plugins\\cdxvidext' @scanTargets 2>&1
@@ -50,6 +51,7 @@ try {
         'BUILDINFO.json',
         'Install-FlightRecorder.ps1',
         'Uninstall-FlightRecorder.ps1',
+        'Collect-Diagnostics.ps1',
         'runtime\ffmpeg\8.1.2\bin\ffmpeg.exe',
         'runtime\ffmpeg\8.1.2\bin\ffprobe.exe',
         'runtime\ffmpeg\8.1.2\LICENSE.txt',

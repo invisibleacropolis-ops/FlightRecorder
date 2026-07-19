@@ -81,6 +81,8 @@ Permanent evidence removal is deliberately separate:
 
 The script requires an exact typed confirmation before deleting evidence.
 
+For support, run `Collect-Diagnostics.ps1` from the release package. It creates a redacted ZIP with versions, hashes, encoder/runtime details, plugin state, and rolling logs—never recordings, snapshots, raw prompts, decrypted input, or encryption keys.
+
 ## Privacy and local security
 
 First-run consent is required before any UI, bridge, hook, or MCP path can arm the recorder. The notice explains that:
