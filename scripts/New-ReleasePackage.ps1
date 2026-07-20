@@ -49,8 +49,13 @@ Remove-Item -LiteralPath $expanded -Recurse -Force
 New-Item -ItemType Directory -Path (Join-Path $staging '.agents\plugins'), (Join-Path $staging 'plugins') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo '.agents\plugins\marketplace.json') -Destination (Join-Path $staging '.agents\plugins\marketplace.json')
 Copy-Item -LiteralPath (Join-Path $repo 'plugins\flight-recorder') -Destination (Join-Path $staging 'plugins\flight-recorder') -Recurse
+. (Join-Path $repo 'FlightRecorder-Hooks.ps1')
+Initialize-FlightRecorderPluginHooks `
+    -PluginRoot (Join-Path $staging 'plugins\flight-recorder') `
+    -Version $version | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'Install-FlightRecorder.ps1') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repo 'Uninstall-FlightRecorder.ps1') -Destination $staging
+Copy-Item -LiteralPath (Join-Path $repo 'FlightRecorder-Hooks.ps1') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\Collect-Diagnostics.ps1') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repo 'PRIVACY.md') -Destination $staging

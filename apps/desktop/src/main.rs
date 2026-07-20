@@ -94,7 +94,7 @@ const NORMAL_MIN_HEIGHT: f64 = 700.0;
 
 #[derive(Clone, Copy)]
 struct NormalWindowGeometry {
-    position: PhysicalPosition<i32>,
+    position: Option<PhysicalPosition<i32>>,
     inner_size: PhysicalSize<u32>,
     maximized: bool,
 }
@@ -218,14 +218,27 @@ fn start_window_mode_controller(app: AppHandle, manager: Arc<RecorderManager>) -
 
 fn enter_compact_mode(window: &WebviewWindow) -> Result<NormalWindowGeometry> {
     let (minimum_size, fallback_size) = normal_window_sizes(window)?;
+    let candidate_position = window.outer_position()?;
+    let outer_size = window.outer_size()?;
+    let work_areas = active_work_areas(window)?;
     let geometry = NormalWindowGeometry {
-        position: window.outer_position()?,
+        position: normal_window_position_is_recoverable(
+            candidate_position,
+            outer_size,
+            &work_areas,
+        )
+        .then_some(candidate_position),
         inner_size: normalized_normal_size(window.inner_size()?, minimum_size, fallback_size),
         maximized: window.is_maximized()?,
     };
-    let monitor = window
-        .current_monitor()?
-        .context("the recorder window is not on an active monitor")?;
+    let current_monitor = window.current_monitor()?;
+    let primary_monitor = window.primary_monitor()?;
+    let compact_work_area = current_monitor
+        .as_ref()
+        .map(|monitor| *monitor.work_area())
+        .or_else(|| primary_monitor.as_ref().map(|monitor| *monitor.work_area()))
+        .or_else(|| work_areas.first().copied())
+        .context("no active monitor is available for the recorder toolbar")?;
     if geometry.maximized {
         window.unmaximize()?;
     }
@@ -239,7 +252,7 @@ fn enter_compact_mode(window: &WebviewWindow) -> Result<NormalWindowGeometry> {
     ))?;
     let actual_size = window.outer_size()?;
     window.set_position(compact_window_position(
-        *monitor.work_area(),
+        compact_work_area,
         actual_size,
         COMPACT_WINDOW_MARGIN,
     ))?;
@@ -259,14 +272,18 @@ fn leave_compact_mode(
     if window.is_maximized()? {
         window.unmaximize()?;
     }
+    let (minimum_size, fallback_size) = normal_window_sizes(window)?;
     if let Some(geometry) = normal_geometry {
-        let (minimum_size, fallback_size) = normal_window_sizes(window)?;
-        window.set_size(normalized_normal_size(
-            geometry.inner_size,
-            minimum_size,
-            fallback_size,
-        ))?;
-        window.set_position(geometry.position)?;
+        let target_size = normalized_normal_size(geometry.inner_size, minimum_size, fallback_size);
+        window.set_size(target_size)?;
+        let work_areas = active_work_areas(window)?;
+        if geometry.position.is_some_and(|position| {
+            normal_window_position_is_recoverable(position, target_size, &work_areas)
+        }) {
+            window.set_position(geometry.position.expect("checked normal position"))?;
+        } else {
+            window.center()?;
+        }
         if geometry.maximized {
             window.maximize()?;
         }
@@ -291,16 +308,52 @@ fn reveal_normal_window(
 ) -> Result<()> {
     let (minimum_size, _) = normal_window_sizes(window)?;
     let current_size = window.inner_size()?;
+    let position_is_recoverable = normal_window_position_is_recoverable(
+        window.outer_position()?,
+        window.outer_size()?,
+        &active_work_areas(window)?,
+    );
     if window.is_minimized()?
         || !window.is_visible()?
         || current_size.width < minimum_size.width
         || current_size.height < minimum_size.height
+        || !position_is_recoverable
     {
         return leave_compact_mode(window, normal_geometry);
     }
     window.show()?;
     window.set_focus()?;
     Ok(())
+}
+
+fn active_work_areas(window: &WebviewWindow) -> Result<Vec<PhysicalRect<i32, u32>>> {
+    Ok(window
+        .available_monitors()?
+        .into_iter()
+        .map(|monitor| *monitor.work_area())
+        .collect())
+}
+
+fn normal_window_position_is_recoverable(
+    position: PhysicalPosition<i32>,
+    window_size: PhysicalSize<u32>,
+    work_areas: &[PhysicalRect<i32, u32>],
+) -> bool {
+    const MINIMUM_VISIBLE_EDGE: i64 = 64;
+    let window_left = i64::from(position.x);
+    let window_top = i64::from(position.y);
+    let window_right = window_left + i64::from(window_size.width);
+    let window_bottom = window_top + i64::from(window_size.height);
+
+    work_areas.iter().any(|work_area| {
+        let area_left = i64::from(work_area.position.x);
+        let area_top = i64::from(work_area.position.y);
+        let area_right = area_left + i64::from(work_area.size.width);
+        let area_bottom = area_top + i64::from(work_area.size.height);
+        let visible_width = window_right.min(area_right) - window_left.max(area_left);
+        let visible_height = window_bottom.min(area_bottom) - window_top.max(area_top);
+        visible_width >= MINIMUM_VISIBLE_EDGE && visible_height >= MINIMUM_VISIBLE_EDGE
+    })
 }
 
 fn normal_window_sizes(window: &WebviewWindow) -> Result<(PhysicalSize<u32>, PhysicalSize<u32>)> {

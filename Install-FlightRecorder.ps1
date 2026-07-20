@@ -31,6 +31,23 @@ function Invoke-CodexJson([string[]]$Arguments) {
     return ($output -join [Environment]::NewLine) | ConvertFrom-Json
 }
 
+function Stop-FlightRecorderProcesses {
+    Get-Process -Name 'cdxvidext-desktop' -ErrorAction SilentlyContinue | Stop-Process -Force
+    foreach ($process in @(Get-Process -Name 'cdxvidext-bridge' -ErrorAction SilentlyContinue)) {
+        try {
+            $processPath = $process.Path
+            if ($processPath -and (
+                $processPath.StartsWith($controlRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                $processPath -match '(?i)[\\/]\.codex[\\/]plugins[\\/]cache[\\/]flight-recorder[\\/]'
+            )) {
+                $process | Stop-Process -Force
+            }
+        } catch {
+            Write-Warning "Could not inspect or stop Flight Recorder bridge process $($process.Id): $($_.Exception.Message)"
+        }
+    }
+}
+
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -notin @('AMD64', 'x86')) { throw 'Flight Recorder preview requires Windows x64.' }
 $os = [Environment]::OSVersion.Version
 if ($os.Major -lt 10 -or ($os.Major -eq 10 -and $os.Build -lt 18362)) { throw 'Flight Recorder requires Windows 10 version 1903 or newer.' }
@@ -75,6 +92,9 @@ try {
         $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $bundleRoot $executable.Path)).Hash.ToLowerInvariant()
         if ($actual -ne $buildInfo.files.($executable.Hash)) { throw "$($executable.Path) checksum validation failed." }
     }
+    $hookSupportPath = Join-Path $bundleRoot 'FlightRecorder-Hooks.ps1'
+    if (-not (Test-Path -LiteralPath $hookSupportPath)) { throw 'Release bundle is missing Flight Recorder hook installation support.' }
+    . $hookSupportPath
 
     if (-not (Test-WebView2)) {
         if ($SkipWebView2Install) { throw 'WebView2 is missing and automatic installation was disabled.' }
@@ -117,6 +137,9 @@ try {
     New-Item -ItemType Directory -Path $distributionStage -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $bundleRoot '.agents') -Destination $distributionStage -Recurse
     Copy-Item -LiteralPath (Join-Path $bundleRoot 'plugins') -Destination $distributionStage -Recurse
+    $pluginHookInstallation = Initialize-FlightRecorderPluginHooks `
+        -PluginRoot (Join-Path $distributionStage 'plugins\flight-recorder') `
+        -Version $buildInfo.version
     $distributionBackup = $null
     if (Test-Path -LiteralPath $distributionRoot) {
         $distributionBackup = "$distributionRoot.rollback-$([guid]::NewGuid())"
@@ -129,6 +152,10 @@ try {
         throw
     }
 
+    $codexHome = Get-FlightRecorderCodexHome
+    Uninstall-FlightRecorderHooks -CodexHome $codexHome | Out-Null
+    Stop-FlightRecorderProcesses
+
     $marketplaces = Invoke-CodexJson @('plugin', 'marketplace', 'list', '--json')
     if ($marketplaces.marketplaces.name -contains 'flight-recorder') {
         & codex plugin marketplace remove flight-recorder | Out-Null
@@ -137,19 +164,28 @@ try {
     Invoke-CodexJson @('plugin', 'marketplace', 'add', $distributionRoot, '--json') | Out-Null
 
     $installed = Invoke-CodexJson @('plugin', 'list', '--json')
-    $legacyIds = @($installed.installed | Where-Object name -eq 'cdxvidext' | ForEach-Object pluginId)
+    $previousIds = @($installed.installed | Where-Object { $_.name -in @('cdxvidext', 'flight-recorder') } | ForEach-Object pluginId)
     [ordered]@{
         recorded_at_utc = [DateTime]::UtcNow.ToString('o')
-        previous_plugin_ids = $legacyIds
+        previous_plugin_ids = $previousIds
         replacement_plugin_id = 'flight-recorder@flight-recorder'
+        replacement_hook_install_id = $pluginHookInstallation.InstallId
         evidence_root = $controlRoot
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $controlRoot 'installer-rollback.json') -Encoding utf8
-    foreach ($legacyId in $legacyIds) { Invoke-CodexJson @('plugin', 'remove', $legacyId, '--json') | Out-Null }
+    Stop-FlightRecorderProcesses
+    foreach ($previousId in $previousIds) { Invoke-CodexJson @('plugin', 'remove', $previousId, '--json') | Out-Null }
+    $pluginCache = Join-Path $codexHome 'plugins\cache\flight-recorder'
+    if (Test-Path -LiteralPath $pluginCache) {
+        $resolvedCache = (Resolve-Path -LiteralPath $pluginCache).Path
+        $expectedCache = [IO.Path]::GetFullPath($pluginCache)
+        if ($resolvedCache -ne $expectedCache) { throw "Unsafe Flight Recorder cache path: $resolvedCache" }
+        Remove-Item -LiteralPath $resolvedCache -Recurse -Force
+    }
     try {
         Invoke-CodexJson @('plugin', 'add', 'flight-recorder@flight-recorder', '--json') | Out-Null
     } catch {
-        foreach ($legacyId in $legacyIds) {
-            try { Invoke-CodexJson @('plugin', 'add', $legacyId, '--json') | Out-Null } catch { Write-Warning "Could not restore $legacyId automatically." }
+        foreach ($previousId in $previousIds) {
+            try { Invoke-CodexJson @('plugin', 'add', $previousId, '--json') | Out-Null } catch { Write-Warning "Could not restore $previousId automatically." }
         }
         if ($distributionBackup -and (Test-Path -LiteralPath $distributionBackup)) {
             if (Test-Path -LiteralPath $distributionRoot) { Remove-Item -LiteralPath $distributionRoot -Recurse -Force }
@@ -160,7 +196,7 @@ try {
 
     if ($distributionBackup -and (Test-Path -LiteralPath $distributionBackup)) { Remove-Item -LiteralPath $distributionBackup -Recurse -Force }
 
-    Get-Process -Name 'cdxvidext-desktop' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Stop-FlightRecorderProcesses
     Write-Host 'Flight Recorder installed successfully.' -ForegroundColor Green
     Write-Host 'Next: review and trust the plugin hooks, restart Codex Desktop, and open a new task.'
     Write-Host 'Your existing recordings and preferences were preserved.'

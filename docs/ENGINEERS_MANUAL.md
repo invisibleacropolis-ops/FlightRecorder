@@ -428,9 +428,13 @@ The MCP configuration sets `cwd` to the installed plugin root and launches `./bi
 
 `Test-PortablePackage.ps1` performs a real Codex marketplace installation under a temporary `CODEX_HOME` whose path contains spaces, finds the installed cache copy, executes its bridge, and validates the installed hook definition. The clean-machine gate still validates these paths in Codex Desktop before publication.
 
-### 7.2 Hook discovery and trust
+### 7.2 Hook discovery, replacement, and trust
 
-Codex discovers the plugin's default `hooks/hooks.json` when the plugin is enabled. The current hook set is:
+The packaged plugin owns its four hooks through `hooks/hooks.json`. The release installer copies a pristine plugin into a new staging directory, injects a new install identity and current version into those plugin-relative commands, removes the prior plugin and cache, and asks Codex to install that staged plugin. The Hooks UI must therefore show exactly one Flight Recorder source under **From Plugins > flight-recorder** and no Flight Recorder entry under **User config**.
+
+Every install starts from the packaged plugin hook file and creates four fresh plugin-owned handlers with a new random install identity. Nothing from the previous installed plugin hook definition or cache is retained. Installer and uninstaller cleanup recognizes and removes user-config entries created by the defective interim preview, but never creates user-config hooks. Unrelated user hooks and metadata are preserved with a same-directory temporary file followed by atomic replacement.
+
+The current hook set is:
 
 | Event | Matcher | Purpose |
 | --- | --- | --- |
@@ -439,13 +443,13 @@ Codex discovers the plugin's default `hooks/hooks.json` when the plugin is enabl
 | `PostToolUse` | exact `mcp__node_repl__js` | Complete tool interval |
 | `Stop` | all | End the latest turn, capture a 500 ms tail, finalize |
 
-Plugin installation or enablement does not automatically trust command hooks. Codex stores trust against the exact hook-definition hash. Any command, matcher, timeout, or status-message change can require the user to review and trust the hooks again.
+Plugin installation or enablement does not automatically trust command hooks. Codex stores trust against the exact hook-definition hash. The generated install identity deliberately changes that hash on every install, so the user must review and trust the newly installed commands instead of inheriting a stale trust decision.
 
 Operational checklist after a hook change:
 
 1. rebuild and restage both executables and plugin files;
 2. change the plugin version/cachebuster so Codex does not retain the old package;
-3. reinstall or refresh the plugin through the configured personal marketplace;
+3. run the installer or reinstall through the configured marketplace and regenerate the staged plugin hooks;
 4. review and trust the new hook definitions in Codex;
 5. restart Codex Desktop when MCP or plugin startup configuration changed;
 6. begin a new Codex task for the cleanest verification;
@@ -458,6 +462,8 @@ Official references: [Codex hooks](https://learn.chatgpt.com/docs/hooks) and [bu
 ### 7.3 Hook input and output contract
 
 The bridge accepts common snake-case and camel-case field variants for session, turn, tool, and tool-call identifiers. It reads exactly one JSON value and writes one JSON object plus a newline.
+
+Prompt delivery is idempotent by turn identifier. A duplicate `UserPromptSubmit` received while capture is starting cannot claim a second startup, and a duplicate received after the flight becomes active does not add the same turn twice. This protects the recorder if a Codex release dispatches both the packaged fallback hook and the installer-generated user hook. The real duplicate-delivery test starts two bridge hook processes against the armed recorder concurrently and requires exactly one new, complete on-disk session.
 
 On a normal acknowledgement it returns an empty object:
 
@@ -1102,12 +1108,12 @@ This is preferable to starting a second desktop. It sends `OpenRecorder`, which 
 If it remains invisible:
 
 1. check whether status reports `Recording`; compact mode should be on the bottom-right of the window's current monitor;
-2. inspect all connected monitors and work areas, including disconnected or recently rearranged displays;
+2. inspect all connected monitors and work areas, including disconnected or recently rearranged displays; `-32000,-32000` is the Windows minimized sentinel and must never be retained as normal geometry;
 3. run the debug desktop from a terminal with `RUST_LOG=cdxvidext=debug`;
 4. look for `could not enter compact recording mode`, `could not restore the reviewer window`, or `could not reveal the recorder window`;
 5. stop the existing process normally and restart one instance.
 
-Alt-Tab is not authoritative because close hides the window and compact mode changes decorations.
+Alt-Tab is not authoritative because close hides the window and compact mode changes decorations. The native controller validates both saved and current positions against active monitor work areas. `OpenRecorder` forces a full restore and centers the reviewer whenever fewer than 64 pixels on either axis intersect an active work area.
 
 ### 16.3 Prompt submitted but recording does not start
 
@@ -1363,7 +1369,7 @@ Install a local candidate with:
 .\Install-FlightRecorder.ps1 -BundlePath .\dist\FlightRecorder-v0.2.0-preview.1-Windows-x64.zip
 ```
 
-The installer stages a durable local marketplace and runtime under `%LOCALAPPDATA%\CdxVidExt`, automatically replaces installed plugins named `cdxvidext`, preserves their source and evidence, and rolls back their Codex installation IDs if the new install fails. After install:
+The installer stages a durable local marketplace and runtime under `%LOCALAPPDATA%\CdxVidExt`, removes prior `cdxvidext` and `flight-recorder` installations plus their cache, recreates the staged plugin's own four hooks with a new identity, and installs that plugin from scratch. It cleans accidental Flight Recorder user-config hooks from the defective interim preview, preserves unrelated Codex hooks, source checkouts, and evidence, and attempts to restore prior Codex plugin IDs if the new install fails. After install:
 
 1. verify the installed hook and MCP commands resolve to the staged bridge;
 2. review and trust the current hook definitions;

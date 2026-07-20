@@ -56,8 +56,17 @@ struct RuntimeState {
     state: RecorderState,
     armed: bool,
     monitor_index: Option<usize>,
+    starting_turn_id: Option<String>,
     active: Option<ActiveSession>,
     last_error: Option<String>,
+}
+
+fn claim_prompt_start(starting_turn_id: &mut Option<String>, turn_id: &str) -> bool {
+    if starting_turn_id.is_some() {
+        return false;
+    }
+    *starting_turn_id = Some(turn_id.to_owned());
+    true
 }
 
 pub struct RecorderManager {
@@ -90,6 +99,7 @@ impl RecorderManager {
                 state: RecorderState::Disarmed,
                 armed: false,
                 monitor_index: None,
+                starting_turn_id: None,
                 active: None,
                 last_error: None,
             }),
@@ -384,6 +394,7 @@ impl RecorderManager {
                 }
                 runtime.armed = true;
                 runtime.monitor_index = Some(monitor.index);
+                runtime.starting_turn_id = None;
                 runtime.state = RecorderState::Armed;
                 runtime.last_error = None;
                 Ok(json!({ "armed": true, "monitor": monitor }))
@@ -393,6 +404,7 @@ impl RecorderManager {
                 let mut runtime = self.runtime.lock();
                 runtime.armed = false;
                 runtime.monitor_index = None;
+                runtime.starting_turn_id = None;
                 runtime.state = RecorderState::Disarmed;
                 Ok(json!({ "armed": false }))
             }
@@ -568,6 +580,12 @@ impl RecorderManager {
         {
             let mut runtime = self.runtime.lock();
             if let Some(active) = runtime.active.as_mut() {
+                if active.latest_turn_id == turn_id {
+                    return Ok(json!({
+                        "session_id": active.id,
+                        "ignored": "duplicate_prompt"
+                    }));
+                }
                 active.input.flush_pending_text()?;
                 active.writer.add_turn(
                     &turn_id,
@@ -581,12 +599,21 @@ impl RecorderManager {
             if !runtime.armed {
                 return Ok(json!({ "ignored": "recorder_not_armed" }));
             }
+            if !claim_prompt_start(&mut runtime.starting_turn_id, &turn_id) {
+                let ignored = if runtime.starting_turn_id.as_deref() == Some(turn_id.as_str()) {
+                    "duplicate_prompt"
+                } else {
+                    "recording_start_in_progress"
+                };
+                return Ok(json!({ "ignored": ignored }));
+            }
             runtime.state = RecorderState::Recording;
         }
         match self.start_session(&event, &turn_id) {
             Ok(id) => Ok(json!({ "session_id": id, "continued": false })),
             Err(error) => {
                 let mut runtime = self.runtime.lock();
+                runtime.starting_turn_id = None;
                 runtime.state = RecorderState::Error;
                 runtime.last_error = Some(format!("{error:#}"));
                 Err(error)
@@ -641,7 +668,9 @@ impl RecorderManager {
                 return Err(error.context("screen capture could not start"));
             }
         };
-        self.runtime.lock().active = Some(ActiveSession {
+        let mut runtime = self.runtime.lock();
+        runtime.starting_turn_id = None;
+        runtime.active = Some(ActiveSession {
             id: id.clone(),
             writer,
             capture,
@@ -785,6 +814,7 @@ mod manager_tests {
                 state: RecorderState::Disarmed,
                 armed: false,
                 monitor_index: None,
+                starting_turn_id: None,
                 active: None,
                 last_error: None,
             }),
@@ -819,6 +849,7 @@ mod manager_tests {
                 state: RecorderState::Disarmed,
                 armed: false,
                 monitor_index: None,
+                starting_turn_id: None,
                 active: None,
                 last_error: None,
             }),
@@ -854,6 +885,7 @@ mod manager_tests {
                 state: RecorderState::Recording,
                 armed: true,
                 monitor_index: None,
+                starting_turn_id: None,
                 active: None,
                 last_error: None,
             }),

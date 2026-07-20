@@ -1,6 +1,6 @@
 {
   "name": "flight-recorder",
-  "version": "0.2.0-preview.1+codex.20260720152834",
+  "version": "0.2.0-preview.1+codex.20260720175907",
   "description": "Record and review local Codex flights with screen, input, action, and exact-frame evidence.",
   "author": {
     "name": "Invisible Acropolis",

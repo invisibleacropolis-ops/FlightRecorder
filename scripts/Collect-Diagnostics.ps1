@@ -17,6 +17,41 @@ try {
     & codex --version 2>&1 | Set-Content -LiteralPath (Join-Path $work 'codex-version.txt') -Encoding utf8
     & codex plugin list --json 2>&1 | Set-Content -LiteralPath (Join-Path $work 'plugins.json') -Encoding utf8
     & codex plugin marketplace list --json 2>&1 | Set-Content -LiteralPath (Join-Path $work 'marketplaces.json') -Encoding utf8
+    $codexHome = if ($env:CODEX_HOME) { [IO.Path]::GetFullPath($env:CODEX_HOME) } else { [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.codex')) }
+    function Get-FlightRecorderHookSummary([string]$Path) {
+        if (-not (Test-Path -LiteralPath $Path)) { return @() }
+        $document = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+        @(
+            foreach ($eventProperty in @($document.hooks.PSObject.Properties)) {
+                foreach ($group in @($eventProperty.Value)) {
+                    foreach ($handler in @($group.hooks)) {
+                        $command = [string]$handler.commandWindows
+                        if (-not $command) { $command = [string]$handler.command }
+                        if ($command -match '(?i)(--flight-recorder-install-id|cdxvidext-bridge(?:\.exe)?["'']?\s+hook)') {
+                            [ordered]@{
+                                event = $eventProperty.Name
+                                install_id = if ($command -match '--flight-recorder-install-id\s+([0-9a-f-]{36})') { $Matches[1] } else { $null }
+                                version = if ($command -match '--flight-recorder-version\s+"([^"]+)"') { $Matches[1] } else { $null }
+                                plugin_root_relative = ($command -match '%PLUGIN_ROOT%|\$\{PLUGIN_ROOT\}')
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+    $userHooksPath = Join-Path $codexHome 'hooks.json'
+    $installedPluginHooks = Get-ChildItem -LiteralPath (Join-Path $codexHome 'plugins\cache\flight-recorder') -Recurse -Filter 'hooks.json' -File -ErrorAction SilentlyContinue |
+        Where-Object FullName -match '[\\/]hooks[\\/]hooks\.json$' |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    $hookReport = [ordered]@{
+        user_config_file_exists = (Test-Path -LiteralPath $userHooksPath)
+        accidental_user_config_handlers = @(Get-FlightRecorderHookSummary $userHooksPath)
+        installed_plugin_hooks_found = ($null -ne $installedPluginHooks)
+        plugin_handlers = if ($installedPluginHooks) { @(Get-FlightRecorderHookSummary $installedPluginHooks.FullName) } else { @() }
+    }
+    $hookReport | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $work 'hook-registration.json') -Encoding utf8
     $runtime = Join-Path $controlRoot 'runtime\ffmpeg\8.1.2\bin'
     foreach ($name in @('ffmpeg.exe', 'ffprobe.exe')) {
         $path = Join-Path $runtime $name

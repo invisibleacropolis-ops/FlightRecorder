@@ -35,7 +35,7 @@ The easiest installation method is `FlightRecorder-Setup.exe`. Download the late
 
 The installer provides the complete Flight Recorder application, Codex plugin, and pinned FFmpeg runtime. It also installs Microsoft Edge WebView2 Runtime if Windows does not already provide it. You do not need to install Rust, Visual Studio, Python, or FFmpeg separately. Codex Desktop or Codex CLI and a supported version of Windows are still required.
 
-During installation, Flight Recorder verifies its bundled components, stages the local Codex marketplace, replaces any installed `cdxvidext` development plugin, and installs `flight-recorder@flight-recorder`. It does not change the machine `PATH`, and upgrades preserve `%LOCALAPPDATA%\CdxVidExt`.
+During every installation, Flight Recorder verifies its bundled components, removes any prior `cdxvidext` or `flight-recorder` Codex installation and cache, replaces the staged runtime and marketplace, and installs `flight-recorder@flight-recorder` fresh. Before Codex installs that staged plugin, the installer recreates the plugin-owned `hooks/hooks.json` with a unique install identity in each command. This forces the four hooks under **From Plugins > flight-recorder** to receive a fresh trust decision without creating a second set under **User config**. The installer also removes accidental Flight Recorder user-config entries left by an earlier preview, while preserving hooks belonging to the user or other integrations. It does not change the machine `PATH`, and upgrades preserve compatible evidence and preferences under `%LOCALAPPDATA%\CdxVidExt`.
 
 After installation:
 
@@ -48,7 +48,7 @@ The two packaged executables are internal components, not separate installers: `
 
 ## Upgrade and legacy replacement
 
-The installer detects installed plugins whose name is `cdxvidext`, removes their Codex installation after the new package is staged, and installs `flight-recorder`. If installation fails, it attempts to restore the prior plugin IDs. It does not delete the old plugin source folder or any evidence.
+The installer detects installed plugins named `cdxvidext` or `flight-recorder`, stops their Flight Recorder processes, removes their Codex installation and cache, and installs a fresh `flight-recorder` copy. No Flight Recorder hook command is retained across the replacement. If installation fails, it attempts to restore the prior plugin IDs. It does not delete a development source folder or existing evidence.
 
 The following remain compatible:
 
@@ -61,7 +61,7 @@ Existing evidence is enrolled in a `Default Session` without moving its files. N
 
 ## Uninstall
 
-Open **Settings > Apps > Installed apps**, find Flight Recorder, and select **Uninstall**. The standard uninstall removes the application, Codex plugin, local marketplace, and managed FFmpeg runtime. Recordings, snapshots, preferences, and keys remain under `%LOCALAPPDATA%\CdxVidExt`.
+Open **Settings > Apps > Installed apps**, find Flight Recorder, and select **Uninstall**. The standard uninstall removes the plugin-owned hooks with the plugin, cleans any accidental Flight Recorder user-config entries, and removes the application, plugin cache, local marketplace, and managed FFmpeg runtime. Hooks belonging to other integrations are preserved. Recordings, snapshots, preferences, and keys remain under `%LOCALAPPDATA%\CdxVidExt`.
 
 Source-built and manually packaged installations also include the PowerShell uninstaller. Permanent evidence removal is deliberately separate:
 
