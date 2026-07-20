@@ -1,6 +1,6 @@
 {
   "name": "flight-recorder",
-  "version": "0.2.0-preview.1",
+  "version": "0.2.0-preview.1+codex.20260720152834",
   "description": "Record and review local Codex flights with screen, input, action, and exact-frame evidence.",
   "author": {
     "name": "Invisible Acropolis",
@@ -40,6 +40,8 @@
     "termsOfServiceURL": "https://github.com/invisibleacropolis-ops/FlightRecorder/blob/main/TERMS.md",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/composer-icon.svg",
-    "screenshots": ["./assets/flight-recorder.png"]
+    "screenshots": [
+      "./assets/flight-recorder.png"
+    ]
   }
 }

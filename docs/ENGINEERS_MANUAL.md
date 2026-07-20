@@ -66,6 +66,7 @@ Implemented product behavior:
 - The reviewer presents a smaller, friendly evidence model while MCP retains access to the detailed raw event timeline.
 - During recording, the full reviewer becomes a stop-only toolbar at the bottom-right of the current monitor. It returns to its previous geometry after finalization.
 - The Preferences modal owns future flight/snapshot roots, independent retention cohorts, automatic cutoff, capture quality/resolution, and live MCP presence.
+- The reviewer owns durable archive sessions that group flights and screenshots, select the destination for new evidence, and cascade-delete a confirmed session locally.
 
 Explicitly out of scope today:
 
@@ -82,6 +83,8 @@ Explicitly out of scope today:
 ### 1.1 Terminology
 
 **Flight** and **recording session** refer to the same persisted recording. A flight can contain more than one Codex turn.
+
+**Archive session** is the higher-level GUI container selected above Recorded flights. It groups flights, snapshot exports, and shared-frame tray records. Internally this remains distinct from the stable recording `session_id` used by MCP.
 
 **Turn** is a prompt-to-stop unit identified by Codex. A follow-up prompt submitted while recording adds another turn to the active flight.
 
@@ -728,31 +731,37 @@ CdxVidExt
 ├── index.sqlite3
 ├── index.sqlite3-wal / index.sqlite3-shm when active
 ├── exports
-│   └── <stable-session-id>
-│       └── frame-<requested-offset-ms>.png
+│   └── <archive-session-id>
+│       └── <stable-recording-session-id>
+│           └── frame-<requested-offset-ms>.png
 └── sessions
-    └── <stable-session-id>
-        ├── session.sqlite3
-        ├── session.sqlite3-wal / session.sqlite3-shm when active
-        ├── session.key
-        ├── capture.mp4 or capture.mp4.part
-        ├── thumbnails
-        │   └── poster.jpg
+    └── <archive-session-id>
+        └── <stable-recording-session-id>
+            ├── session.sqlite3
+            ├── session.sqlite3-wal / session.sqlite3-shm when active
+            ├── session.key
+            ├── capture.mp4 or capture.mp4.part
+            ├── thumbnails
+            │   └── poster.jpg
 ```
 
 `exports` and `sessions` above are defaults. Selected roots may be elsewhere. Legacy flights can still contain an `exports` subdirectory; registered legacy snapshots are relocated to the current snapshot root before their containing flight is deleted.
+
+Archive-session names are metadata only. Renaming never moves evidence because new paths use the stable archive ID. Migration creates and selects `Default Session`, assigns existing flights and registered screenshots to it, and preserves all existing paths. New snapshots use `<snapshot-root>\<archive-session-id>\<recording-session-id>`.
 
 ### 12.1 Global index
 
 The global database uses WAL mode and contains:
 
-**sessions** — stable ID, UTC start/end, raw state, duration, monitor name, output size, raw frame/event counts, pin state, media path, exact storage root/session path, and optional display name.
+**archive_sessions** — stable archive ID, unique normalized display name, and creation time. The active archive ID is stored in settings.
+
+**sessions** — stable recording ID, archive membership, UTC start/end, raw state, duration, monitor name, output size, raw frame/event counts, pin state, media path, exact storage root/session path, and optional display name.
 
 **settings** — atomically replaced `preferences_v1`, legacy retention compatibility, and persistent selected-frame settings.
 
-**snapshot_exports** — stable snapshot ID, source flight/time, snapped frame/time, PNG path, MIME type, creation time, and cached nearest-event metadata.
+**snapshot_exports** — stable snapshot ID, archive membership, source flight/time, snapped frame/time, exact PNG path/root, MIME type, creation time, and cached nearest-event metadata.
 
-**shared_frames** — stable share ID linked to the snapshot registry plus enough duplicated timing/event metadata for the tray entry to remain readable after source-flight deletion.
+**shared_frames** — stable share ID and archive membership linked to the snapshot registry plus enough duplicated timing/event metadata for the tray entry to remain readable after source-flight deletion.
 
 Index migrations are idempotent. Older session rows derive their exact paths from the preserved media path. Existing Shared-frame rows are enrolled in the snapshot registry without rewriting the PNG. No semantic telemetry is reconstructed for legacy sessions.
 
@@ -784,6 +793,10 @@ Do not copy or inspect only the main SQLite file while the recorder is active. R
 Never edit a production session database to make a test pass. Derived indexes can be regenerated only by intentional migration code; source evidence should remain immutable during diagnosis.
 
 ### 12.4 Rename, pin, deletion, and retention
+
+Archive-session names are trimmed, contain 1–80 Unicode characters, and are unique ignoring case. Create selects the new archive; selection persists across restarts. Session controls are rejected while recording or finalizing so a flight cannot change ownership during creation.
+
+Confirmed archive-session deletion rechecks its displayed flight, pinned-flight, snapshot, and shared-frame counts before removing evidence. Every existing registered path is resolved and checked beneath its persisted storage root before any recursive deletion. Pinned flights are included. The newest surviving archive is selected afterward; deleting the last archive creates a fresh empty `Default Session`.
 
 Custom flight titles are trimmed and must contain 1–80 Unicode characters. Duplicates are allowed. Resetting sets the custom title to null and restores the generated timestamp title.
 
@@ -844,6 +857,7 @@ The native WebView loads an Axum server on a randomly assigned loopback port. St
 Most interface fragments are rendered on the server:
 
 - live status and controls;
+- archive-session selector and action state;
 - recorded-flight list;
 - selected-flight player;
 - telemetry columns;
@@ -854,6 +868,7 @@ Most interface fragments are rendered on the server:
 Minimal browser JavaScript owns state that is inherently client-side:
 
 - archive collapsed preference in `localStorage`;
+- archive create/rename editor, switching refresh, and counted delete confirmation;
 - currently expanded flight and event rows;
 - selected flight highlight;
 - video play/pause, frame stepping, and scrubber;
@@ -865,7 +880,7 @@ Minimal browser JavaScript owns state that is inherently client-side:
 
 ### 14.2 Reviewer endpoints
 
-JSON and media endpoints cover status, sessions, raw timeline, decryption, video, shared images, arm/disarm/stop, selection, pin/delete/rename, timeline mapping, loading/saving Preferences, native folder selection, and MCP presence.
+JSON and media endpoints cover status, archive-session create/select/rename/delete preview/delete, recording sessions, raw timeline, decryption, video, shared images, arm/disarm/stop, selection, pin/delete/rename, timeline mapping, loading/saving Preferences, native folder selection, and MCP presence.
 
 HTML partial endpoints cover status, session cards, the selected-flight reviewer, telemetry, lazy event details, the shared tray, the Preferences form, and its two-second MCP status refresh.
 
@@ -1260,6 +1275,8 @@ Snapshots do not exempt a source flight. Retained snapshots are independently re
 ### 16.17 Rename or delete fails
 
 Rename rejects an empty trimmed title or more than 80 Unicode characters. Reset uses null, not an empty string.
+
+Archive-session rename also rejects a case-insensitive duplicate. Archive switching and mutations are intentionally unavailable while recording or finalizing. If archive deletion says its contents changed, reopen the confirmation so the backend and displayed counts agree.
 
 Ordinary deletion rejects pinned flights. Confirmed pinned deletion must set the explicit flag. Invalid session IDs and any resolved path outside the session root are rejected before recursive deletion.
 

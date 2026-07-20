@@ -16,9 +16,9 @@ use crate::capture::{CaptureSession, list_monitors, output_dimensions};
 use crate::clock::{qpc_frequency, qpc_now_100ns};
 use crate::input::InputObserver;
 use crate::model::{
-    BridgeRequest, BridgeResponse, HookEvent, McpConnectionStatus, McpHeartbeat, McpInstanceStatus,
-    PRIVACY_CONSENT_VERSION, PrivacyConsent, PrivacyConsentStatus, RecorderState, RecorderStatus,
-    RuntimeDiagnostics,
+    ArchiveDeletePreview, ArchiveSession, BridgeRequest, BridgeResponse, HookEvent,
+    McpConnectionStatus, McpHeartbeat, McpInstanceStatus, PRIVACY_CONSENT_VERSION, PrivacyConsent,
+    PrivacyConsentStatus, RecorderState, RecorderStatus, RuntimeDiagnostics,
 };
 use crate::parser::parse_sky_actions;
 use crate::process::{ffmpeg_command, ffmpeg_path, ffprobe_command, ffprobe_path};
@@ -101,6 +101,53 @@ impl RecorderManager {
 
     pub fn store(&self) -> &Arc<Store> {
         &self.store
+    }
+
+    pub fn archive_controls_locked(&self) -> bool {
+        matches!(
+            self.runtime.lock().state,
+            RecorderState::Recording | RecorderState::Finalizing
+        )
+    }
+
+    fn require_archive_controls_unlocked(&self) -> Result<()> {
+        if self.archive_controls_locked() {
+            bail!("session controls are unavailable while a flight is recording or finalizing");
+        }
+        Ok(())
+    }
+
+    pub fn create_archive_session(&self, display_name: &str) -> Result<ArchiveSession> {
+        self.require_archive_controls_unlocked()?;
+        self.store.create_archive_session(display_name)
+    }
+
+    pub fn select_archive_session(&self, archive_id: &str) -> Result<ArchiveSession> {
+        self.require_archive_controls_unlocked()?;
+        self.store.select_archive_session(archive_id)
+    }
+
+    pub fn rename_archive_session(
+        &self,
+        archive_id: &str,
+        display_name: &str,
+    ) -> Result<ArchiveSession> {
+        self.require_archive_controls_unlocked()?;
+        self.store.rename_archive_session(archive_id, display_name)
+    }
+
+    pub fn archive_delete_preview(&self, archive_id: &str) -> Result<ArchiveDeletePreview> {
+        self.require_archive_controls_unlocked()?;
+        self.store.archive_delete_preview(archive_id)
+    }
+
+    pub fn delete_archive_session(
+        &self,
+        archive_id: &str,
+        expected: &ArchiveDeletePreview,
+    ) -> Result<ArchiveSession> {
+        self.require_archive_controls_unlocked()?;
+        self.store.delete_archive_session(archive_id, expected)
     }
 
     pub fn record_mcp_heartbeat(&self, heartbeat: McpHeartbeat) {
@@ -794,6 +841,38 @@ mod manager_tests {
             .expect("consent setting");
         assert!(raw.contains("accepted_at_utc"));
         drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_mutations_are_rejected_while_recording_or_finalizing() {
+        let root =
+            std::env::temp_dir().join(format!("cdxvidext-archive-lock-{}", uuid::Uuid::now_v7()));
+        let manager = RecorderManager {
+            store: Store::open(root.clone()).unwrap(),
+            runtime: Mutex::new(RuntimeState {
+                state: RecorderState::Recording,
+                armed: true,
+                monitor_index: None,
+                active: None,
+                last_error: None,
+            }),
+            mcp_instances: Mutex::new(HashMap::new()),
+        };
+
+        assert!(manager.create_archive_session("Blocked").is_err());
+        manager.runtime.lock().state = RecorderState::Finalizing;
+        assert!(manager.create_archive_session("Still Blocked").is_err());
+        manager.runtime.lock().state = RecorderState::Armed;
+        assert_eq!(
+            manager
+                .create_archive_session("Available")
+                .unwrap()
+                .display_name,
+            "Available"
+        );
+
+        drop(manager);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

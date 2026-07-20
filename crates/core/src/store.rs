@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,8 +15,8 @@ use serde_json::{Value, json};
 
 use crate::crypto::SessionCrypto;
 use crate::model::{
-    CaptureQuality, CaptureResolution, FrameEvidence, Preferences, PurgeResult, SessionSummary,
-    SharedFrame, TimelineEvent, TimelinePage,
+    ArchiveDeletePreview, ArchiveSession, CaptureQuality, CaptureResolution, FrameEvidence,
+    Preferences, PurgeResult, SessionSummary, SharedFrame, TimelineEvent, TimelinePage,
 };
 use crate::presentation::{PresentedTimeline, group_presented_events, present_observed_events};
 use crate::process::ffmpeg_command;
@@ -23,6 +24,8 @@ use crate::process::ffmpeg_command;
 pub const SESSION_DB: &str = "session.sqlite3";
 pub const MEDIA_FILE: &str = "capture.mp4";
 const PREFERENCES_KEY: &str = "preferences_v1";
+const ACTIVE_ARCHIVE_SESSION_KEY: &str = "active_archive_session_id";
+const DEFAULT_ARCHIVE_SESSION_NAME: &str = "Default Session";
 
 pub fn data_root() -> Result<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is not set")?;
@@ -85,6 +88,35 @@ fn active_retention_boundary(
         .transpose()
 }
 
+fn normalize_archive_name(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn validate_archive_name(value: &str) -> Result<(&str, String)> {
+    let trimmed = value.trim();
+    let length = trimmed.chars().count();
+    if !(1..=80).contains(&length) {
+        bail!("session name must contain between 1 and 80 characters");
+    }
+    Ok((trimmed, normalize_archive_name(trimmed)))
+}
+
+fn validate_existing_descendant(root: &Path, path: &Path) -> Result<PathBuf> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("could not resolve storage root {}", root.display()))?;
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("could not resolve registered evidence {}", path.display()))?;
+    if path == root || !path.starts_with(&root) {
+        bail!(
+            "refusing to delete registered evidence outside its storage root: {}",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
 pub struct Store {
     root: PathBuf,
     index: Mutex<Connection>,
@@ -119,7 +151,8 @@ impl Store {
                 media_path TEXT NOT NULL,
                 display_name TEXT,
                 storage_root TEXT,
-                session_path TEXT
+                session_path TEXT,
+                archive_session_id TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at_utc DESC);
             CREATE TABLE IF NOT EXISTS settings (
@@ -137,7 +170,8 @@ impl Store {
                 image_path TEXT NOT NULL,
                 mime_type TEXT NOT NULL,
                 created_at_utc TEXT NOT NULL,
-                nearest_event_json TEXT
+                nearest_event_json TEXT,
+                archive_session_id TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_shared_frames_created
                 ON shared_frames(created_at_utc ASC);
@@ -152,10 +186,20 @@ impl Store {
                 mime_type TEXT NOT NULL,
                 created_at_utc TEXT NOT NULL,
                 nearest_event_json TEXT,
+                archive_session_id TEXT,
+                storage_root TEXT,
                 UNIQUE(session_id, requested_offset_ms)
             );
             CREATE INDEX IF NOT EXISTS idx_snapshot_exports_created
                 ON snapshot_exports(created_at_utc ASC);
+            CREATE TABLE IF NOT EXISTS archive_sessions (
+                archive_session_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL UNIQUE,
+                created_at_utc TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_archive_sessions_created
+                ON archive_sessions(created_at_utc DESC);
             ",
         )?;
         let has_display_name = {
@@ -181,6 +225,15 @@ impl Store {
         if !session_columns.iter().any(|name| name == "session_path") {
             connection.execute("ALTER TABLE sessions ADD COLUMN session_path TEXT", [])?;
         }
+        if !session_columns
+            .iter()
+            .any(|name| name == "archive_session_id")
+        {
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN archive_session_id TEXT",
+                [],
+            )?;
+        }
         let shared_columns = {
             let mut statement = connection.prepare("PRAGMA table_info(shared_frames)")?;
             statement
@@ -196,6 +249,36 @@ impl Store {
         {
             connection.execute(
                 "ALTER TABLE shared_frames ADD COLUMN nearest_event_json TEXT",
+                [],
+            )?;
+        }
+        if !shared_columns
+            .iter()
+            .any(|name| name == "archive_session_id")
+        {
+            connection.execute(
+                "ALTER TABLE shared_frames ADD COLUMN archive_session_id TEXT",
+                [],
+            )?;
+        }
+        let snapshot_columns = {
+            let mut statement = connection.prepare("PRAGMA table_info(snapshot_exports)")?;
+            statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if !snapshot_columns
+            .iter()
+            .any(|name| name == "archive_session_id")
+        {
+            connection.execute(
+                "ALTER TABLE snapshot_exports ADD COLUMN archive_session_id TEXT",
+                [],
+            )?;
+        }
+        if !snapshot_columns.iter().any(|name| name == "storage_root") {
+            connection.execute(
+                "ALTER TABLE snapshot_exports ADD COLUMN storage_root TEXT",
                 [],
             )?;
         }
@@ -305,6 +388,111 @@ impl Store {
                 ],
             )?;
         }
+        let selected_archive = connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [ACTIVE_ARCHIVE_SESSION_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .filter(|archive_id| {
+                connection
+                    .query_row(
+                        "SELECT 1 FROM archive_sessions WHERE archive_session_id = ?1",
+                        [archive_id],
+                        |_| Ok(()),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten()
+                    .is_some()
+            });
+        let archive_session_id = if let Some(archive_id) = selected_archive {
+            archive_id
+        } else if let Some(archive_id) = connection
+            .query_row(
+                "SELECT archive_session_id FROM archive_sessions
+                 ORDER BY created_at_utc DESC, rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            archive_id
+        } else {
+            let archive_id = uuid::Uuid::now_v7().to_string();
+            connection.execute(
+                "INSERT INTO archive_sessions(
+                    archive_session_id, display_name, normalized_name, created_at_utc
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    archive_id,
+                    DEFAULT_ARCHIVE_SESSION_NAME,
+                    normalize_archive_name(DEFAULT_ARCHIVE_SESSION_NAME),
+                    Utc::now().to_rfc3339(),
+                ],
+            )?;
+            archive_id
+        };
+        connection.execute(
+            "INSERT INTO settings(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![ACTIVE_ARCHIVE_SESSION_KEY, archive_session_id],
+        )?;
+        connection.execute(
+            "UPDATE sessions SET archive_session_id = ?1 WHERE archive_session_id IS NULL",
+            [&archive_session_id],
+        )?;
+        connection.execute(
+            "UPDATE snapshot_exports
+             SET archive_session_id = COALESCE(
+                 (SELECT sessions.archive_session_id FROM sessions
+                  WHERE sessions.session_id = snapshot_exports.session_id), ?1)
+             WHERE archive_session_id IS NULL",
+            [&archive_session_id],
+        )?;
+        connection.execute(
+            "UPDATE shared_frames
+             SET archive_session_id = COALESCE(
+                 (SELECT snapshot_exports.archive_session_id FROM snapshot_exports
+                  WHERE snapshot_exports.snapshot_id = shared_frames.snapshot_id),
+                 (SELECT sessions.archive_session_id FROM sessions
+                  WHERE sessions.session_id = shared_frames.session_id), ?1)
+             WHERE archive_session_id IS NULL",
+            [&archive_session_id],
+        )?;
+        let snapshots_without_roots = {
+            let mut statement = connection.prepare(
+                "SELECT snapshot_id, image_path FROM snapshot_exports WHERE storage_root IS NULL",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (snapshot_id, image_path) in snapshots_without_roots {
+            let path = PathBuf::from(image_path);
+            let storage_root = path
+                .parent()
+                .and_then(Path::parent)
+                .or_else(|| path.parent())
+                .unwrap_or(&root)
+                .to_string_lossy()
+                .into_owned();
+            connection.execute(
+                "UPDATE snapshot_exports SET storage_root = ?2 WHERE snapshot_id = ?1",
+                params![snapshot_id, storage_root],
+            )?;
+        }
+        connection.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_archive_started
+                 ON sessions(archive_session_id, started_at_utc DESC);
+             CREATE INDEX IF NOT EXISTS idx_snapshot_exports_archive
+                 ON snapshot_exports(archive_session_id, created_at_utc ASC);
+             CREATE INDEX IF NOT EXISTS idx_shared_frames_archive
+                 ON shared_frames(archive_session_id, created_at_utc ASC);",
+        )?;
         Ok(Arc::new(Self {
             root,
             index: Mutex::new(connection),
@@ -313,6 +501,289 @@ impl Store {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn list_archive_sessions(&self) -> Result<Vec<ArchiveSession>> {
+        let connection = self.index.lock();
+        let mut statement = connection.prepare(
+            "SELECT archive_session_id, display_name, created_at_utc
+             FROM archive_sessions ORDER BY created_at_utc DESC, rowid DESC",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok(ArchiveSession {
+                    archive_session_id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    created_at_utc: row.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn active_archive_session(&self) -> Result<ArchiveSession> {
+        let archive_id = self
+            .get_setting(ACTIVE_ARCHIVE_SESSION_KEY)?
+            .context("no archive session is selected")?;
+        self.get_archive_session(&archive_id)
+    }
+
+    pub fn get_archive_session(&self, archive_id: &str) -> Result<ArchiveSession> {
+        self.index
+            .lock()
+            .query_row(
+                "SELECT archive_session_id, display_name, created_at_utc
+                 FROM archive_sessions WHERE archive_session_id = ?1",
+                [archive_id],
+                |row| {
+                    Ok(ArchiveSession {
+                        archive_session_id: row.get(0)?,
+                        display_name: row.get(1)?,
+                        created_at_utc: row.get(2)?,
+                    })
+                },
+            )
+            .with_context(|| format!("session {archive_id} was not found"))
+    }
+
+    pub fn create_archive_session(&self, display_name: &str) -> Result<ArchiveSession> {
+        let (display_name, normalized_name) = validate_archive_name(display_name)?;
+        let archive_id = uuid::Uuid::now_v7().to_string();
+        let created_at_utc = Utc::now().to_rfc3339();
+        let mut connection = self.index.lock();
+        let transaction = connection.transaction()?;
+        transaction
+            .execute(
+                "INSERT INTO archive_sessions(
+                    archive_session_id, display_name, normalized_name, created_at_utc
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                params![archive_id, display_name, normalized_name, created_at_utc],
+            )
+            .map_err(|error| {
+                if error.to_string().contains("UNIQUE constraint failed") {
+                    anyhow::anyhow!("a session with that name already exists")
+                } else {
+                    error.into()
+                }
+            })?;
+        transaction.execute(
+            "INSERT INTO settings(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![ACTIVE_ARCHIVE_SESSION_KEY, archive_id],
+        )?;
+        transaction.commit()?;
+        Ok(ArchiveSession {
+            archive_session_id: archive_id,
+            display_name: display_name.to_owned(),
+            created_at_utc,
+        })
+    }
+
+    pub fn select_archive_session(&self, archive_id: &str) -> Result<ArchiveSession> {
+        let archive = self.get_archive_session(archive_id)?;
+        self.set_setting(ACTIVE_ARCHIVE_SESSION_KEY, archive_id)?;
+        Ok(archive)
+    }
+
+    pub fn rename_archive_session(
+        &self,
+        archive_id: &str,
+        display_name: &str,
+    ) -> Result<ArchiveSession> {
+        let (display_name, normalized_name) = validate_archive_name(display_name)?;
+        let changed = self
+            .index
+            .lock()
+            .execute(
+                "UPDATE archive_sessions
+                 SET display_name = ?2, normalized_name = ?3
+                 WHERE archive_session_id = ?1",
+                params![archive_id, display_name, normalized_name],
+            )
+            .map_err(|error| {
+                if error.to_string().contains("UNIQUE constraint failed") {
+                    anyhow::anyhow!("a session with that name already exists")
+                } else {
+                    error.into()
+                }
+            })?;
+        if changed == 0 {
+            bail!("session {archive_id} was not found");
+        }
+        self.get_archive_session(archive_id)
+    }
+
+    pub fn archive_delete_preview(&self, archive_id: &str) -> Result<ArchiveDeletePreview> {
+        let archive = self.get_archive_session(archive_id)?;
+        let connection = self.index.lock();
+        let (flights, pinned_flights) = connection.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN pinned != 0 THEN 1 ELSE 0 END), 0)
+             FROM sessions WHERE archive_session_id = ?1",
+            [archive_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let snapshots = connection.query_row(
+            "SELECT COUNT(*) FROM snapshot_exports WHERE archive_session_id = ?1",
+            [archive_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let shared_frames = connection.query_row(
+            "SELECT COUNT(*) FROM shared_frames WHERE archive_session_id = ?1",
+            [archive_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(ArchiveDeletePreview {
+            archive_session_id: archive.archive_session_id,
+            display_name: archive.display_name,
+            flights: flights as usize,
+            pinned_flights: pinned_flights as usize,
+            snapshots: snapshots as usize,
+            shared_frames: shared_frames as usize,
+        })
+    }
+
+    pub fn delete_archive_session(
+        &self,
+        archive_id: &str,
+        expected: &ArchiveDeletePreview,
+    ) -> Result<ArchiveSession> {
+        let selected = self.active_archive_session()?;
+        if selected.archive_session_id != archive_id {
+            bail!("only the selected session can be deleted");
+        }
+        let current = self.archive_delete_preview(archive_id)?;
+        if &current != expected {
+            bail!("session contents changed; review the updated deletion summary");
+        }
+        let (flight_paths, snapshot_paths) = {
+            let connection = self.index.lock();
+            let mut flight_statement = connection.prepare(
+                "SELECT storage_root, session_path FROM sessions
+                 WHERE archive_session_id = ?1",
+            )?;
+            let flight_paths = flight_statement
+                .query_map([archive_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut snapshot_statement = connection.prepare(
+                "SELECT storage_root, image_path FROM snapshot_exports
+                 WHERE archive_session_id = ?1",
+            )?;
+            let snapshot_paths = snapshot_statement
+                .query_map([archive_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            (flight_paths, snapshot_paths)
+        };
+        let mut validated_snapshots = HashSet::new();
+        for (root, path) in &snapshot_paths {
+            let path = PathBuf::from(path);
+            if path.exists() {
+                validated_snapshots.insert(validate_existing_descendant(Path::new(root), &path)?);
+            }
+        }
+        let mut validated_flights = HashSet::new();
+        for (root, path) in &flight_paths {
+            let path = PathBuf::from(path);
+            if path.exists() {
+                validated_flights.insert(validate_existing_descendant(Path::new(root), &path)?);
+            }
+        }
+        let mut archive_directories = HashSet::new();
+        for (root, _) in flight_paths.iter().chain(snapshot_paths.iter()) {
+            let root = PathBuf::from(root);
+            let archive_dir = root.join(archive_id);
+            if archive_dir.exists() {
+                archive_directories.insert(validate_existing_descendant(&root, &archive_dir)?);
+            }
+        }
+        for path in validated_snapshots {
+            if path.is_file() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to delete snapshot {}", path.display()))?;
+            }
+        }
+        for path in validated_flights {
+            if path.is_dir() {
+                fs::remove_dir_all(&path)
+                    .with_context(|| format!("failed to delete flight {}", path.display()))?;
+            }
+        }
+        for path in archive_directories {
+            if path.is_dir() {
+                fs::remove_dir_all(&path).with_context(|| {
+                    format!("failed to delete session directory {}", path.display())
+                })?;
+            }
+        }
+        let mut connection = self.index.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM settings
+             WHERE key IN ('selected_session', 'selected_offset_ms')
+               AND EXISTS(
+                   SELECT 1 FROM sessions
+                   WHERE sessions.archive_session_id = ?1
+                     AND (settings.key = 'selected_offset_ms'
+                          OR settings.value = sessions.session_id)
+               )",
+            [archive_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM shared_frames WHERE archive_session_id = ?1",
+            [archive_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM snapshot_exports WHERE archive_session_id = ?1",
+            [archive_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM sessions WHERE archive_session_id = ?1",
+            [archive_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM archive_sessions WHERE archive_session_id = ?1",
+            [archive_id],
+        )?;
+        let next = transaction
+            .query_row(
+                "SELECT archive_session_id, display_name, created_at_utc
+                 FROM archive_sessions ORDER BY created_at_utc DESC, rowid DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok(ArchiveSession {
+                        archive_session_id: row.get(0)?,
+                        display_name: row.get(1)?,
+                        created_at_utc: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_else(|| ArchiveSession {
+                archive_session_id: uuid::Uuid::now_v7().to_string(),
+                display_name: DEFAULT_ARCHIVE_SESSION_NAME.to_owned(),
+                created_at_utc: Utc::now().to_rfc3339(),
+            });
+        transaction.execute(
+            "INSERT OR IGNORE INTO archive_sessions(
+                archive_session_id, display_name, normalized_name, created_at_utc
+             ) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                next.archive_session_id,
+                next.display_name,
+                normalize_archive_name(&next.display_name),
+                next.created_at_utc,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO settings(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![ACTIVE_ARCHIVE_SESSION_KEY, next.archive_session_id],
+        )?;
+        transaction.commit()?;
+        Ok(next)
     }
 
     pub fn preferences(&self) -> Result<Preferences> {
@@ -484,6 +955,17 @@ impl Store {
             .unwrap_or_else(|| self.root.join("sessions").join(session_id))
     }
 
+    fn archive_session_id_for_flight(&self, session_id: &str) -> Result<String> {
+        self.index
+            .lock()
+            .query_row(
+                "SELECT archive_session_id FROM sessions WHERE session_id = ?1",
+                [session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .with_context(|| format!("recording session {session_id} was not found"))
+    }
+
     pub fn create_session(
         &self,
         session_id: &str,
@@ -497,7 +979,11 @@ impl Store {
         output_height: u32,
     ) -> Result<Arc<SessionWriter>> {
         let preferences = self.preferences()?;
-        let dir = preferences.flight_root.join(session_id);
+        let archive = self.active_archive_session()?;
+        let dir = preferences
+            .flight_root
+            .join(&archive.archive_session_id)
+            .join(session_id);
         fs::create_dir_all(dir.join("thumbnails"))?;
         fs::create_dir_all(dir.join("exports"))?;
         let writer = Arc::new(SessionWriter::create(
@@ -513,8 +999,8 @@ impl Store {
         )?);
         let media_path = dir.join(MEDIA_FILE);
         self.index.lock().execute(
-            "INSERT INTO sessions(session_id, started_at_utc, state, monitor_name, output_width, output_height, media_path, storage_root, session_path)
-             VALUES (?1, ?2, 'recording', ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO sessions(session_id, started_at_utc, state, monitor_name, output_width, output_height, media_path, storage_root, session_path, archive_session_id)
+             VALUES (?1, ?2, 'recording', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 session_id,
                 started_at_utc,
@@ -523,7 +1009,8 @@ impl Store {
                 output_height,
                 media_path.to_string_lossy(),
                 preferences.flight_root.to_string_lossy(),
-                dir.to_string_lossy()
+                dir.to_string_lossy(),
+                archive.archive_session_id,
             ],
         )?;
         Ok(writer)
@@ -556,15 +1043,36 @@ impl Store {
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<(Vec<SessionSummary>, Option<String>)> {
+        self.list_sessions_in_archive(None, cursor, limit)
+    }
+
+    pub fn list_sessions_for_archive(
+        &self,
+        archive_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<(Vec<SessionSummary>, Option<String>)> {
+        self.get_archive_session(archive_id)?;
+        self.list_sessions_in_archive(Some(archive_id), cursor, limit)
+    }
+
+    fn list_sessions_in_archive(
+        &self,
+        archive_id: Option<&str>,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<(Vec<SessionSummary>, Option<String>)> {
         let offset = decode_cursor(cursor).unwrap_or(0);
         let limit = limit.clamp(1, 100);
         let connection = self.index.lock();
         let mut statement = connection.prepare(
             "SELECT session_id, started_at_utc, ended_at_utc, state, duration_ms, monitor_name,
                     output_width, output_height, frame_count, event_count, pinned, media_path, display_name
-             FROM sessions ORDER BY started_at_utc DESC LIMIT ?1 OFFSET ?2",
+             FROM sessions
+             WHERE (?1 IS NULL OR archive_session_id = ?1)
+             ORDER BY started_at_utc DESC LIMIT ?2 OFFSET ?3",
         )?;
-        let mut rows = statement.query(params![(limit + 1) as i64, offset])?;
+        let mut rows = statement.query(params![archive_id, (limit + 1) as i64, offset])?;
         let mut sessions = Vec::new();
         while let Some(row) = rows.next()? {
             sessions.push(SessionSummary {
@@ -784,7 +1292,8 @@ impl Store {
             return Ok(());
         }
         let snapshot_root = self.preferences()?.snapshot_root;
-        let destination_dir = snapshot_root.join(session_id);
+        let archive_session_id = self.archive_session_id_for_flight(session_id)?;
+        let destination_dir = snapshot_root.join(archive_session_id).join(session_id);
         fs::create_dir_all(&destination_dir)?;
         for (snapshot_id, image_path) in snapshots {
             let source = PathBuf::from(&image_path);
@@ -809,8 +1318,9 @@ impl Store {
             let mut connection = self.index.lock();
             let transaction = connection.transaction()?;
             transaction.execute(
-                "UPDATE snapshot_exports SET image_path = ?2 WHERE snapshot_id = ?1",
-                params![snapshot_id, destination],
+                "UPDATE snapshot_exports
+                 SET image_path = ?2, storage_root = ?3 WHERE snapshot_id = ?1",
+                params![snapshot_id, destination, snapshot_root.to_string_lossy()],
             )?;
             transaction.execute(
                 "UPDATE shared_frames SET image_path = ?2 WHERE snapshot_id = ?1",
@@ -850,6 +1360,7 @@ impl Store {
     pub fn share_frame(&self, session_id: &str, offset_ms: i64) -> Result<SharedFrame> {
         let evidence = self.extract_frame(session_id, offset_ms)?;
         let snapshot_id = self.snapshot_id_for(session_id, offset_ms)?;
+        let archive_session_id = self.archive_session_id_for_flight(session_id)?;
         let shared = SharedFrame {
             share_id: uuid::Uuid::now_v7().to_string(),
             session_id: evidence.session_id,
@@ -865,8 +1376,9 @@ impl Store {
         self.index.lock().execute(
             "INSERT INTO shared_frames(
                 share_id, snapshot_id, session_id, requested_offset_ms, frame_number, offset_100ns,
-                offset_ms, image_path, mime_type, created_at_utc, nearest_event_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                offset_ms, image_path, mime_type, created_at_utc, nearest_event_json,
+                archive_session_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 shared.share_id,
                 snapshot_id,
@@ -879,20 +1391,32 @@ impl Store {
                 shared.mime_type,
                 shared.created_at_utc,
                 serde_json::to_string(&shared.nearest_event)?,
+                archive_session_id,
             ],
         )?;
         Ok(shared)
     }
 
     pub fn list_shared_frames(&self) -> Result<Vec<SharedFrame>> {
+        self.list_shared_frames_in_archive(None)
+    }
+
+    pub fn list_shared_frames_for_archive(&self, archive_id: &str) -> Result<Vec<SharedFrame>> {
+        self.get_archive_session(archive_id)?;
+        self.list_shared_frames_in_archive(Some(archive_id))
+    }
+
+    fn list_shared_frames_in_archive(&self, archive_id: Option<&str>) -> Result<Vec<SharedFrame>> {
         let records = {
             let connection = self.index.lock();
             let mut statement = connection.prepare(
                 "SELECT share_id, session_id, requested_offset_ms, frame_number, offset_100ns,
                         offset_ms, image_path, mime_type, created_at_utc, nearest_event_json
-                 FROM shared_frames ORDER BY created_at_utc ASC, rowid ASC",
+                 FROM shared_frames
+                 WHERE (?1 IS NULL OR archive_session_id = ?1)
+                 ORDER BY created_at_utc ASC, rowid ASC",
             )?;
-            let rows = statement.query_map([], |row| {
+            let rows = statement.query_map([archive_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -968,6 +1492,14 @@ impl Store {
         Ok(self.index.lock().execute("DELETE FROM shared_frames", [])?)
     }
 
+    pub fn clear_shared_frames_for_archive(&self, archive_id: &str) -> Result<usize> {
+        self.get_archive_session(archive_id)?;
+        Ok(self.index.lock().execute(
+            "DELETE FROM shared_frames WHERE archive_session_id = ?1",
+            [archive_id],
+        )?)
+    }
+
     pub fn extract_frame(&self, session_id: &str, offset_ms: i64) -> Result<FrameEvidence> {
         let session = self.get_session(session_id)?;
         let registered = self
@@ -1019,7 +1551,11 @@ impl Store {
         }
         let dir = self.session_dir(session_id);
         let preferences = self.preferences()?;
-        let snapshot_dir = preferences.snapshot_root.join(session_id);
+        let archive_session_id = self.archive_session_id_for_flight(session_id)?;
+        let snapshot_dir = preferences
+            .snapshot_root
+            .join(&archive_session_id)
+            .join(session_id);
         fs::create_dir_all(&snapshot_dir)?;
         let image_path = snapshot_dir.join(format!("frame-{offset_ms}.png"));
         if !image_path.exists() {
@@ -1053,14 +1589,17 @@ impl Store {
         self.index.lock().execute(
             "INSERT INTO snapshot_exports(
                 snapshot_id, session_id, requested_offset_ms, frame_number, offset_100ns,
-                offset_ms, image_path, mime_type, created_at_utc, nearest_event_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'image/png', ?8, ?9)
+                offset_ms, image_path, mime_type, created_at_utc, nearest_event_json,
+                archive_session_id, storage_root
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'image/png', ?8, ?9, ?10, ?11)
              ON CONFLICT(session_id, requested_offset_ms) DO UPDATE SET
                 frame_number = excluded.frame_number,
                 offset_100ns = excluded.offset_100ns,
                 offset_ms = excluded.offset_ms,
                 image_path = excluded.image_path,
-                nearest_event_json = excluded.nearest_event_json",
+                nearest_event_json = excluded.nearest_event_json,
+                archive_session_id = excluded.archive_session_id,
+                storage_root = excluded.storage_root",
             params![
                 snapshot_id,
                 session_id,
@@ -1071,6 +1610,8 @@ impl Store {
                 image_path.to_string_lossy(),
                 Utc::now().to_rfc3339(),
                 serde_json::to_string(&nearest_event)?,
+                archive_session_id,
+                preferences.snapshot_root.to_string_lossy(),
             ],
         )?;
         let snapshot_id = self.snapshot_id_for(session_id, offset_ms)?;
@@ -1640,10 +2181,21 @@ mod tests {
             .unwrap();
         drop(writer);
 
-        assert!(flight_root.join(session_id).join(SESSION_DB).is_file());
+        let archive_id = store.active_archive_session().unwrap().archive_session_id;
+        assert!(
+            flight_root
+                .join(&archive_id)
+                .join(session_id)
+                .join(SESSION_DB)
+                .is_file()
+        );
         assert_eq!(
             store.session_dir(session_id),
-            flight_root.canonicalize().unwrap().join(session_id)
+            flight_root
+                .canonicalize()
+                .unwrap()
+                .join(archive_id)
+                .join(session_id)
         );
         drop(store);
         fs::remove_dir_all(root).unwrap();
@@ -1678,6 +2230,16 @@ mod tests {
         let store = Store::open(root.clone()).unwrap();
 
         assert_eq!(store.session_dir(session_id), session_dir);
+        let default = store.active_archive_session().unwrap();
+        assert_eq!(default.display_name, "Default Session");
+        assert_eq!(
+            store
+                .list_sessions_for_archive(&default.archive_session_id, None, 100)
+                .unwrap()
+                .0[0]
+                .session_id,
+            session_id
+        );
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }
@@ -1735,6 +2297,7 @@ mod tests {
         assert!(status.success());
 
         let shared = store.share_frame(session_id, 0).unwrap();
+        let archive_id = store.active_archive_session().unwrap().archive_session_id;
         let snapshot_path = PathBuf::from(&shared.image_path);
         assert!(snapshot_path.starts_with(snapshot_root.canonicalize().unwrap()));
         assert!(snapshot_path.is_file());
@@ -1745,6 +2308,13 @@ mod tests {
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].share_id, shared.share_id);
         assert!(PathBuf::from(&remaining[0].image_path).is_file());
+        assert_eq!(
+            store
+                .list_shared_frames_for_archive(&archive_id)
+                .unwrap()
+                .len(),
+            1
+        );
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }
@@ -2147,9 +2717,12 @@ mod tests {
             )
             .unwrap();
         drop(writer);
-        let bytes =
-            fs::read(root.join(r"sessions\018f0000-0000-7000-8000-000000000000\session.sqlite3"))
-                .unwrap();
+        let bytes = fs::read(
+            store
+                .session_dir("018f0000-0000-7000-8000-000000000000")
+                .join(SESSION_DB),
+        )
+        .unwrap();
         assert!(
             !bytes
                 .windows(b"secret phrase".len())
@@ -2188,7 +2761,9 @@ mod tests {
             .upsert_tool_end("tool-1", "mcp__node_repl__js", 20)
             .unwrap();
         let connection = Connection::open(
-            root.join(r"sessions\018f0000-0000-7000-8000-000000000001\session.sqlite3"),
+            store
+                .session_dir("018f0000-0000-7000-8000-000000000001")
+                .join(SESSION_DB),
         )
         .unwrap();
         assert_eq!(
@@ -2308,6 +2883,222 @@ mod tests {
         assert!(store.delete_session_confirmed(session_id, false).is_err());
         store.delete_session_confirmed(session_id, true).unwrap();
         assert!(store.get_session(session_id).is_err());
+
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_sessions_persist_selection_filter_flights_and_namespace_real_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "cdxvidext-archive-session-{}",
+            uuid::Uuid::now_v7()
+        ));
+        let store = Store::open(root.clone()).unwrap();
+        let default = store.active_archive_session().unwrap();
+        assert_eq!(default.display_name, "Default Session");
+
+        let archive = store.create_archive_session("  Project Atlas  ").unwrap();
+        assert_eq!(archive.display_name, "Project Atlas");
+        assert_eq!(
+            store.active_archive_session().unwrap().archive_session_id,
+            archive.archive_session_id
+        );
+        assert!(store.create_archive_session("project atlas").is_err());
+        let archive = store
+            .rename_archive_session(&archive.archive_session_id, "Mission Control")
+            .unwrap();
+
+        let flight_id = "018f0000-0000-7000-8000-000000000006";
+        let writer = store
+            .create_session(
+                flight_id,
+                "2026-07-18T16:20:00Z",
+                0,
+                10_000_000,
+                "Display",
+                100,
+                100,
+                100,
+                100,
+            )
+            .unwrap();
+        drop(writer);
+        assert_eq!(
+            store
+                .list_sessions_for_archive(&archive.archive_session_id, None, 100)
+                .unwrap()
+                .0
+                .len(),
+            1
+        );
+        assert!(
+            store
+                .list_sessions_for_archive(&default.archive_session_id, None, 100)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        assert!(
+            store
+                .session_dir(flight_id)
+                .starts_with(root.join("sessions").join(&archive.archive_session_id))
+        );
+
+        drop(store);
+        let reopened = Store::open(root.clone()).unwrap();
+        assert_eq!(
+            reopened.active_archive_session().unwrap().display_name,
+            "Mission Control"
+        );
+        assert_eq!(reopened.list_sessions(None, 100).unwrap().0.len(), 1);
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleting_archive_cascades_real_evidence_and_replaces_the_last_session() {
+        let root =
+            std::env::temp_dir().join(format!("cdxvidext-archive-delete-{}", uuid::Uuid::now_v7()));
+        let store = Store::open(root.clone()).unwrap();
+        let default = store.active_archive_session().unwrap();
+        let archive = store.create_archive_session("Disposable Session").unwrap();
+        let flight_id = "018f0000-0000-7000-8000-000000000007";
+        let writer = store
+            .create_session(
+                flight_id,
+                "2026-07-18T16:20:00Z",
+                0,
+                10_000_000,
+                "Display",
+                100,
+                100,
+                100,
+                100,
+            )
+            .unwrap();
+        drop(writer);
+        store.pin_session(flight_id, true).unwrap();
+        let flight_dir = store.session_dir(flight_id);
+        let snapshot_root = root.join("exports");
+        let flight_archive_dir = root.join("sessions").join(&archive.archive_session_id);
+        let snapshot_archive_dir = snapshot_root.join(&archive.archive_session_id);
+        let snapshot_path = snapshot_root
+            .join(&archive.archive_session_id)
+            .join(flight_id)
+            .join("frame-0.png");
+        fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+        fs::write(&snapshot_path, b"real registered png bytes").unwrap();
+        store
+            .index
+            .lock()
+            .execute(
+                "INSERT INTO snapshot_exports(
+                    snapshot_id, session_id, requested_offset_ms, frame_number, offset_100ns,
+                    offset_ms, image_path, mime_type, created_at_utc, nearest_event_json,
+                    archive_session_id, storage_root
+                 ) VALUES ('snapshot-real', ?1, 0, 0, 0, 0.0, ?2, 'image/png', ?3, NULL, ?4, ?5)",
+                params![
+                    flight_id,
+                    snapshot_path.to_string_lossy(),
+                    Utc::now().to_rfc3339(),
+                    archive.archive_session_id,
+                    snapshot_root.to_string_lossy(),
+                ],
+            )
+            .unwrap();
+        store
+            .index
+            .lock()
+            .execute(
+                "INSERT INTO shared_frames(
+                    share_id, snapshot_id, session_id, requested_offset_ms, frame_number,
+                    offset_100ns, offset_ms, image_path, mime_type, created_at_utc,
+                    nearest_event_json, archive_session_id
+                 ) VALUES ('share-real', 'snapshot-real', ?1, 0, 0, 0, 0.0, ?2,
+                           'image/png', ?3, NULL, ?4)",
+                params![
+                    flight_id,
+                    snapshot_path.to_string_lossy(),
+                    Utc::now().to_rfc3339(),
+                    archive.archive_session_id,
+                ],
+            )
+            .unwrap();
+
+        let preview = store
+            .archive_delete_preview(&archive.archive_session_id)
+            .unwrap();
+        assert_eq!((preview.flights, preview.pinned_flights), (1, 1));
+        assert_eq!((preview.snapshots, preview.shared_frames), (1, 1));
+        let selected = store
+            .delete_archive_session(&archive.archive_session_id, &preview)
+            .unwrap();
+        assert_eq!(selected.archive_session_id, default.archive_session_id);
+        assert!(!flight_dir.exists());
+        assert!(!snapshot_path.exists());
+        assert!(!flight_archive_dir.exists());
+        assert!(!snapshot_archive_dir.exists());
+        assert!(store.get_session(flight_id).is_err());
+        assert!(store.list_shared_frames().unwrap().is_empty());
+
+        let last_preview = store
+            .archive_delete_preview(&default.archive_session_id)
+            .unwrap();
+        let replacement = store
+            .delete_archive_session(&default.archive_session_id, &last_preview)
+            .unwrap();
+        assert_ne!(replacement.archive_session_id, default.archive_session_id);
+        assert_eq!(replacement.display_name, "Default Session");
+        assert_eq!(store.list_archive_sessions().unwrap().len(), 1);
+
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_delete_refuses_a_registered_flight_root_as_the_target() {
+        let root =
+            std::env::temp_dir().join(format!("cdxvidext-archive-guard-{}", uuid::Uuid::now_v7()));
+        let store = Store::open(root.clone()).unwrap();
+        let archive = store.active_archive_session().unwrap();
+        let flight_id = "018f0000-0000-7000-8000-000000000008";
+        let writer = store
+            .create_session(
+                flight_id,
+                "2026-07-18T16:20:00Z",
+                0,
+                10_000_000,
+                "Display",
+                100,
+                100,
+                100,
+                100,
+            )
+            .unwrap();
+        drop(writer);
+        let flight_root = root.join("sessions").canonicalize().unwrap();
+        store
+            .index
+            .lock()
+            .execute(
+                "UPDATE sessions SET session_path = ?2 WHERE session_id = ?1",
+                params![flight_id, flight_root.to_string_lossy()],
+            )
+            .unwrap();
+        let preview = store
+            .archive_delete_preview(&archive.archive_session_id)
+            .unwrap();
+        assert!(
+            store
+                .delete_archive_session(&archive.archive_session_id, &preview)
+                .is_err()
+        );
+        assert!(
+            store
+                .get_archive_session(&archive.archive_session_id)
+                .is_ok()
+        );
 
         drop(store);
         fs::remove_dir_all(root).unwrap();

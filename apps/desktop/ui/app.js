@@ -19,6 +19,34 @@ const request = async (url, body) => {
 };
 
 const refreshSharedFrames = () => htmx.trigger('#share-tray', 'refreshShared');
+const refreshArchiveSessions = () => htmx.trigger('#archive-session-controls', 'refreshArchiveSessions');
+
+const clearArchiveReview = () => {
+  selectedSessionId = null;
+  openFlights.clear();
+  document.querySelector('#reviewer').innerHTML = '<div class="review-empty"><div class="radar"><span></span></div><span class="eyebrow">Evidence viewer</span><h2>Select a recorded flight</h2><p>Choose an observed event, inspect its paused frame, then share the screenshot with Codex.</p></div>';
+  const share = document.querySelector('[data-share-screenshot]');
+  share.disabled = true;
+  delete share.dataset.sessionId;
+};
+
+const refreshArchiveEvidence = () => {
+  htmx.trigger('#sessions', 'refresh');
+  refreshSharedFrames();
+};
+
+const openArchiveEditor = (mode) => {
+  const shell = document.querySelector('#archive-session-controls');
+  const form = shell?.querySelector('[data-archive-session-editor]');
+  const input = form?.elements.display_name;
+  if (!form || !input) return;
+  form.dataset.mode = mode;
+  input.value = mode === 'rename' ? shell.dataset.activeArchiveName : '';
+  form.querySelector('[data-archive-session-error]').hidden = true;
+  form.hidden = false;
+  input.focus();
+  input.select();
+};
 
 const ensurePrivacyConsent = async () => {
   const dialog = document.querySelector('#consent-dialog');
@@ -36,6 +64,11 @@ const syncRecorderMode = () => {
   const state = document.querySelector('#status [data-recorder-state]')?.dataset.recorderState;
   document.body.classList.toggle('recording-mode', state === 'Recording');
   if (state === 'Recording') document.querySelector('#preferences-dialog')?.close();
+  const archiveLocked = state === 'Recording' || state === 'Finalizing';
+  document.querySelectorAll('[data-archive-session-select], [data-create-archive-session], [data-rename-archive-session], [data-delete-archive-session]').forEach((control) => {
+    control.disabled = archiveLocked;
+  });
+  if (archiveLocked) document.querySelector('[data-archive-session-editor]')?.setAttribute('hidden', '');
 };
 
 const openPreferences = async () => {
@@ -158,6 +191,33 @@ document.addEventListener('click', async (event) => {
   const eventToggle = target.closest('[data-event-toggle]');
   const shareScreenshot = target.closest('[data-share-screenshot]');
   const acceptConsent = target.closest('[data-accept-consent]');
+  const createArchive = target.closest('[data-create-archive-session]');
+  const renameArchive = target.closest('[data-rename-archive-session]');
+  const deleteArchive = target.closest('[data-delete-archive-session]');
+  const cancelArchive = target.closest('[data-cancel-archive-session]');
+
+  if (createArchive) openArchiveEditor('create');
+  if (renameArchive) openArchiveEditor('rename');
+  if (cancelArchive) cancelArchive.closest('[data-archive-session-editor]')?.setAttribute('hidden', '');
+  if (deleteArchive) {
+    const shell = deleteArchive.closest('#archive-session-controls');
+    const id = shell?.dataset.activeArchiveId;
+    if (id) {
+      try {
+        const response = await fetch(`/api/archive-sessions/${id}/delete-preview`);
+        const preview = await response.json();
+        if (preview.error) throw new Error(preview.error);
+        const warning = `Permanently delete session “${preview.display_name}”?\n\nThis removes ${preview.flights} flight(s), including ${preview.pinned_flights} pinned, ${preview.snapshots} stored screenshot(s), and ${preview.shared_frames} shared tray entr${preview.shared_frames === 1 ? 'y' : 'ies'}.`;
+        if (window.confirm(warning)) {
+          await request(`/api/archive-sessions/${id}/delete`, preview);
+          clearArchiveReview();
+          refreshArchiveSessions();
+          refreshArchiveEvidence();
+          toast('Session and its evidence deleted.');
+        }
+      } catch (error) { toast(error.message); }
+    }
+  }
 
   if (acceptConsent) {
     const errorNode = document.querySelector('[data-consent-error]');
@@ -278,14 +338,29 @@ document.addEventListener('click', async (event) => {
     const shell = video?.closest('[data-session-id]');
     if (video && shell) {
       try {
-        const result = await request('/api/select', { session_id: shell.dataset.sessionId, offset_ms: Math.round(video.currentTime * 1000) });
-        refreshSharedFrames(); toast(`Screenshot shared · ${result.count} ready for Codex.`);
+        await request('/api/select', { session_id: shell.dataset.sessionId, offset_ms: Math.round(video.currentTime * 1000) });
+        refreshSharedFrames(); toast('Screenshot shared and ready for Codex.');
       } catch (error) { toast(error.message); }
     }
   }
 });
 
 document.addEventListener('change', (event) => {
+  if (event.target.matches('[data-archive-session-select]')) {
+    const id = event.target.value;
+    request(`/api/archive-sessions/${id}/select`)
+      .then(() => {
+        clearArchiveReview();
+        refreshArchiveSessions();
+        refreshArchiveEvidence();
+        toast('Session switched.');
+      })
+      .catch((error) => {
+        toast(error.message);
+        refreshArchiveSessions();
+      });
+    return;
+  }
   if (event.target.matches('[data-consent-checkbox]')) {
     document.querySelector('[data-accept-consent]').disabled = !event.target.checked;
   }
@@ -300,6 +375,31 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('submit', async (event) => {
+  const archiveForm = event.target.closest('[data-archive-session-editor]');
+  if (archiveForm) {
+    event.preventDefault();
+    const shell = archiveForm.closest('#archive-session-controls');
+    const errorNode = archiveForm.querySelector('[data-archive-session-error]');
+    const displayName = archiveForm.elements.display_name.value;
+    try {
+      if (archiveForm.dataset.mode === 'rename') {
+        await request(`/api/archive-sessions/${shell.dataset.activeArchiveId}/rename`, { display_name: displayName });
+        toast('Session renamed.');
+      } else {
+        await request('/api/archive-sessions', { display_name: displayName });
+        clearArchiveReview();
+        refreshArchiveEvidence();
+        toast('New session created.');
+      }
+      archiveForm.hidden = true;
+      refreshArchiveSessions();
+    } catch (error) {
+      errorNode.textContent = error.message;
+      errorNode.hidden = false;
+      errorNode.focus();
+    }
+    return;
+  }
   const form = event.target.closest('[data-preferences-form]');
   if (!form) return;
   event.preventDefault();
@@ -359,6 +459,7 @@ const bindReview = () => {
 document.body.addEventListener('htmx:afterSwap', (event) => {
   if (event.target.id === 'sessions') restoreFlightState();
   if (event.target.id === 'status') syncRecorderMode();
+  if (event.target.id === 'archive-session-controls') syncRecorderMode();
   bindReview();
 });
 document.addEventListener('DOMContentLoaded', () => {

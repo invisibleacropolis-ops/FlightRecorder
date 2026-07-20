@@ -16,11 +16,11 @@ use base64::Engine;
 use cdxvidext_core::RecorderManager;
 use cdxvidext_core::ipc;
 use cdxvidext_core::manager::window_reveal_epoch;
-use cdxvidext_core::model::BridgeRequest;
+use cdxvidext_core::model::{ArchiveDeletePreview, BridgeRequest};
 use cdxvidext_core::{McpConnectionStatus, Preferences};
 use chrono::{DateTime, Datelike, Local, Timelike};
 use rand::RngCore;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{
     AppHandle, LogicalSize, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewUrl,
@@ -74,6 +74,11 @@ struct DeleteRequest {
 #[derive(Deserialize)]
 struct FolderRequest {
     current: String,
+}
+
+#[derive(Deserialize)]
+struct ArchiveNameRequest {
+    display_name: String,
 }
 
 const COMPACT_WINDOW_WIDTH: u32 = 620;
@@ -365,6 +370,23 @@ fn routes(state: AppState) -> Router {
         .route("/api/preferences", get(preferences).post(save_preferences))
         .route("/api/preferences/browse", post(browse_folder))
         .route("/api/mcp-status", get(mcp_status))
+        .route("/api/archive-sessions", post(create_archive_session))
+        .route(
+            "/api/archive-sessions/{archive_id}/select",
+            post(select_archive_session),
+        )
+        .route(
+            "/api/archive-sessions/{archive_id}/rename",
+            post(rename_archive_session),
+        )
+        .route(
+            "/api/archive-sessions/{archive_id}/delete-preview",
+            get(archive_delete_preview),
+        )
+        .route(
+            "/api/archive-sessions/{archive_id}/delete",
+            post(delete_archive_session),
+        )
         .route("/api/sessions", get(sessions))
         .route("/api/timeline/{session_id}", get(timeline))
         .route("/api/decrypt/{session_id}/{event_id}", get(decrypt_event))
@@ -383,6 +405,7 @@ fn routes(state: AppState) -> Router {
         .route("/api/timeline-map/{session_id}", get(timeline_map))
         .route("/api/retention", post(retention))
         .route("/partials/status", get(status_partial))
+        .route("/partials/archive-sessions", get(archive_sessions_partial))
         .route("/partials/preferences", get(preferences_partial))
         .route("/partials/mcp-status", get(mcp_status_partial))
         .route("/partials/sessions", get(sessions_partial))
@@ -546,6 +569,42 @@ async fn browse_folder(Json(body): Json<FolderRequest>) -> Json<Value> {
 async fn mcp_status(State(state): State<AppState>) -> Json<Value> {
     Json(serde_json::to_value(state.manager.mcp_status()).unwrap_or(Value::Null))
 }
+async fn create_archive_session(
+    State(state): State<AppState>,
+    Json(body): Json<ArchiveNameRequest>,
+) -> Json<Value> {
+    result_data(state.manager.create_archive_session(&body.display_name))
+}
+async fn select_archive_session(
+    State(state): State<AppState>,
+    Path(archive_id): Path<String>,
+) -> Json<Value> {
+    result_data(state.manager.select_archive_session(&archive_id))
+}
+async fn rename_archive_session(
+    State(state): State<AppState>,
+    Path(archive_id): Path<String>,
+    Json(body): Json<ArchiveNameRequest>,
+) -> Json<Value> {
+    result_data(
+        state
+            .manager
+            .rename_archive_session(&archive_id, &body.display_name),
+    )
+}
+async fn archive_delete_preview(
+    State(state): State<AppState>,
+    Path(archive_id): Path<String>,
+) -> Json<Value> {
+    result_data(state.manager.archive_delete_preview(&archive_id))
+}
+async fn delete_archive_session(
+    State(state): State<AppState>,
+    Path(archive_id): Path<String>,
+    Json(expected): Json<ArchiveDeletePreview>,
+) -> Json<Value> {
+    result_data(state.manager.delete_archive_session(&archive_id, &expected))
+}
 async fn sessions(State(state): State<AppState>) -> Json<Value> {
     Json(response_data(state.manager.handle_request(
         BridgeRequest::ListSessions {
@@ -610,11 +669,17 @@ async fn remove_shared_frame(
     )))
 }
 async fn clear_shared_frames(State(state): State<AppState>) -> Json<Value> {
-    Json(response_data(
-        state
-            .manager
-            .handle_request(BridgeRequest::ClearSharedFrames),
-    ))
+    let result = state
+        .manager
+        .store()
+        .active_archive_session()
+        .and_then(|archive| {
+            state
+                .manager
+                .store()
+                .clear_shared_frames_for_archive(&archive.archive_session_id)
+        });
+    result_data(result)
 }
 async fn pin(
     State(state): State<AppState>,
@@ -850,14 +915,81 @@ fn render_mcp_status(status: &McpConnectionStatus) -> String {
     }
 }
 
+async fn archive_sessions_partial(State(state): State<AppState>) -> Html<String> {
+    let archives = match state.manager.store().list_archive_sessions() {
+        Ok(archives) => archives,
+        Err(error) => {
+            return Html(format!(
+                "<section id=\"archive-session-controls\" class=\"archive-session-shell\"><p class=\"session-control-error\" role=\"alert\">{}</p></section>",
+                escape(&error.to_string())
+            ));
+        }
+    };
+    let active = match state.manager.store().active_archive_session() {
+        Ok(active) => active,
+        Err(error) => {
+            return Html(format!(
+                "<section id=\"archive-session-controls\" class=\"archive-session-shell\"><p class=\"session-control-error\" role=\"alert\">{}</p></section>",
+                escape(&error.to_string())
+            ));
+        }
+    };
+    let locked = state.manager.archive_controls_locked();
+    let disabled = if locked { " disabled" } else { "" };
+    let options = archives
+        .into_iter()
+        .map(|archive| {
+            format!(
+                "<option value=\"{}\"{}>{}</option>",
+                escape(&archive.archive_session_id),
+                if archive.archive_session_id == active.archive_session_id {
+                    " selected"
+                } else {
+                    ""
+                },
+                escape(&archive.display_name),
+            )
+        })
+        .collect::<String>();
+    Html(format!(
+        r#"<section id="archive-session-controls" class="archive-session-shell" data-active-archive-id="{active_id}" data-active-archive-name="{active_name}" hx-get="/partials/archive-sessions" hx-trigger="refreshArchiveSessions" hx-swap="outerHTML">
+          <label class="eyebrow" for="archive-session-select">Session</label>
+          <div class="archive-select-wrap"><select id="archive-session-select" data-archive-session-select aria-label="Current session"{disabled}>{options}</select><span aria-hidden="true">⌄</span></div>
+          <div class="archive-session-actions" aria-label="Session actions">
+            <button type="button" class="text-button" data-create-archive-session{disabled}>Create New Session</button>
+            <button type="button" class="text-button" data-rename-archive-session{disabled}>Rename Session</button>
+            <button type="button" class="text-button danger-text" data-delete-archive-session{disabled}>Delete</button>
+          </div>
+          <form class="archive-session-editor" data-archive-session-editor hidden>
+            <label class="sr-only" for="archive-session-name">Session name</label>
+            <input id="archive-session-name" name="display_name" maxlength="80" autocomplete="off">
+            <button type="submit" class="button mini">Save</button>
+            <button type="button" class="text-button" data-cancel-archive-session>Cancel</button>
+            <p data-archive-session-error role="alert" tabindex="-1" hidden></p>
+          </form>
+        </section>"#,
+        active_id = escape(&active.archive_session_id),
+        active_name = escape(&active.display_name),
+    ))
+}
+
 async fn sessions_partial(State(state): State<AppState>) -> Html<String> {
+    let archive = match state.manager.store().active_archive_session() {
+        Ok(archive) => archive,
+        Err(error) => {
+            return Html(format!(
+                "<div class=\"empty-list\"><span>SESSION UNAVAILABLE</span><p>{}</p></div>",
+                escape(&error.to_string())
+            ));
+        }
+    };
     let (sessions, _) = state
         .manager
         .store()
-        .list_sessions(None, 100)
+        .list_sessions_for_archive(&archive.archive_session_id, None, 100)
         .unwrap_or_default();
     if sessions.is_empty() {
-        return Html("<div class=\"empty-list\"><span>NO FLIGHTS LOGGED</span><p>Arm a monitor, then submit a Codex prompt.</p></div>".into());
+        return Html("<div class=\"empty-list\"><span>NO FLIGHTS LOGGED IN THIS SESSION</span><p>Arm a monitor, then submit a Codex prompt.</p></div>".into());
     }
     Html(
         sessions
@@ -1032,7 +1164,20 @@ async fn event_detail_partial(
 }
 
 async fn shared_partial(State(state): State<AppState>) -> Html<String> {
-    let frames = match state.manager.store().list_shared_frames() {
+    let archive = match state.manager.store().active_archive_session() {
+        Ok(archive) => archive,
+        Err(error) => {
+            return Html(format!(
+                "<section id=\"share-tray\" class=\"share-tray\"><div class=\"share-error\">{}</div></section>",
+                escape(&error.to_string())
+            ));
+        }
+    };
+    let frames = match state
+        .manager
+        .store()
+        .list_shared_frames_for_archive(&archive.archive_session_id)
+    {
         Ok(frames) => frames,
         Err(error) => {
             return Html(format!(
@@ -1096,6 +1241,12 @@ fn response_data(response: cdxvidext_core::model::BridgeResponse) -> Value {
         json!({ "error": response.error })
     }
 }
+fn result_data<T: Serialize>(result: anyhow::Result<T>) -> Json<Value> {
+    Json(match result {
+        Ok(value) => serde_json::to_value(value).unwrap_or(Value::Null),
+        Err(error) => json!({ "error": format!("{error:#}") }),
+    })
+}
 fn escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -1157,7 +1308,7 @@ mod desktop_tests {
         AppState, compact_window_position, friendly_session_status, generated_session_title,
         normalized_normal_size, render_preferences, routes,
     };
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, StatusCode, header};
     use cdxvidext_core::{
         BridgeRequest, CaptureQuality, CaptureResolution, McpConnectionStatus, Preferences,
@@ -1226,6 +1377,59 @@ mod desktop_tests {
             .await
             .unwrap();
         assert_eq!(authenticated.status(), StatusCode::OK);
+
+        let archive_controls = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/partials/archive-sessions")
+                    .header(header::COOKIE, session_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(archive_controls.status(), StatusCode::OK);
+        let archive_html = String::from_utf8(
+            to_bytes(archive_controls.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        for expected in [
+            "Default Session",
+            "data-archive-session-select",
+            "Create New Session",
+            "Rename Session",
+            "data-delete-archive-session",
+        ] {
+            assert!(archive_html.contains(expected), "missing {expected}");
+        }
+
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/archive-sessions")
+                    .header(header::COOKIE, session_cookie)
+                    .header(header::ORIGIN, origin)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"display_name":"Real Route Session"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        assert_eq!(
+            manager
+                .store()
+                .active_archive_session()
+                .unwrap()
+                .display_name,
+            "Real Route Session"
+        );
 
         let csrf_rejected = app
             .clone()

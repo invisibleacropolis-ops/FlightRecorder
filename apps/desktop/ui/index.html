@@ -15,7 +15,11 @@
   </header>
   <main class="workspace">
     <aside class="flight-index">
-      <div class="panel-heading"><div class="archive-heading"><span class="eyebrow">Local archive</span><h1>Recorded flights</h1></div><button class="archive-flip" data-toggle-archive aria-expanded="true" aria-label="Collapse recorded flights"><span>◀</span></button></div>
+      <div class="panel-heading">
+        <div id="archive-session-controls" class="archive-session-shell" hx-get="/partials/archive-sessions" hx-trigger="load" hx-swap="outerHTML"><span class="eyebrow">Session</span><div class="session-control-loading">Loading sessions…</div></div>
+        <div class="archive-heading"><h1>Recorded flights</h1></div>
+        <button class="archive-flip" data-toggle-archive aria-expanded="true" aria-label="Collapse recorded flights"><span>◀</span></button>
+      </div>
       <div id="sessions" hx-get="/partials/sessions" hx-trigger="load, refresh, every 5s" hx-swap="innerHTML"></div>
       <footer class="storage-note"><span>Storage</span><code>%LOCALAPPDATA%\CdxVidExt</code><button class="text-button" data-open-preferences>Preferences</button></footer>
     </aside>

@@ -171,6 +171,23 @@ pub struct SessionSummary {
     pub display_name: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArchiveSession {
+    pub archive_session_id: String,
+    pub display_name: String,
+    pub created_at_utc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArchiveDeletePreview {
+    pub archive_session_id: String,
+    pub display_name: String,
+    pub flights: usize,
+    pub pinned_flights: usize,
+    pub snapshots: usize,
+    pub shared_frames: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineEvent {
     pub event_id: i64,
