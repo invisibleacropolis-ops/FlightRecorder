@@ -1,5 +1,7 @@
 /target/
 /dist/
+/Distribution/
+/plugins/flight-recorder/bin/
 /node_modules/
 .env
 .idea/
@@ -14,3 +16,4 @@
 *.sqlite3-wal
 runtime-downloads/
 release-staging/
+distribution-staging/

@@ -1363,6 +1363,15 @@ Create the complete GitHub asset with:
 
 This downloads the exact FFmpeg 8.1.2 Essentials ZIP, verifies SHA-256 `db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec`, stages the marketplace, adds licenses and build hashes, and produces the release ZIP plus standalone diagnostic binaries and `SHA256SUMS.txt`.
 
+For a self-contained folder that a recipient can unzip, open in Codex Desktop, and ask Codex to install without downloading dependencies, first place the Microsoft x64 WebView2 Evergreen Standalone Installer at `runtime-downloads\MicrosoftEdgeWebView2RuntimeInstallerX64.exe`, then run:
+
+```powershell
+.\scripts\New-Distribution.ps1
+.\scripts\Test-Distribution.ps1
+```
+
+The builder verifies the Microsoft Authenticode signature, rebuilds and validates the plugin, expands the pinned FFmpeg runtime, copies every plugin companion, and generates `Distribution\BUILDINFO.json` plus a recursive `Distribution\SHA256SUMS.txt`. The distribution's `AGENTS.md` instructs the recipient's Codex agent to run `Verify-Distribution.ps1` and `Install-FlightRecorder.ps1 -BundlePath . -Offline`. Offline mode refuses to download WebView2 if the bundled standalone installer is absent.
+
 Install a local candidate with:
 
 ```powershell

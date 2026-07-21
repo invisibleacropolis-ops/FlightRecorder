@@ -12,3 +12,11 @@ Release packages include the unmodified Gyan.dev FFmpeg 8.1.2 Essentials distrib
 - License: GPL-3.0; the complete license and distributor README are included beside the runtime in every release package.
 
 The FFmpeg archive must not be committed to this Git repository. Release engineering downloads the pinned archive, verifies its hash, and includes the required notices in the GitHub release asset.
+
+## Microsoft Edge WebView2 Runtime
+
+Offline distribution folders include Microsoft's unmodified x64 Evergreen Standalone Installer as `MicrosoftEdgeWebView2RuntimeInstallerX64.exe`. It is used only when a supported WebView2 Runtime is not already installed. The distribution builder and verifier require a valid Authenticode signature from Microsoft Corporation and record the exact file hash in `BUILDINFO.json` and `SHA256SUMS.txt`.
+
+- Publisher and binary distributor: Microsoft Corporation
+- Deployment documentation: https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
+- Runtime download page: https://developer.microsoft.com/microsoft-edge/webview2/

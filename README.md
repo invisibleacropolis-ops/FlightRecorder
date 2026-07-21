@@ -113,6 +113,17 @@ To create a distributable bundle from your source build, run:
 
 The packaging script downloads and verifies the pinned FFmpeg archive, includes the required licensing materials, and writes the generated assets under `dist`. See the [Engineering Manual](docs/ENGINEERS_MANUAL.md) for the deeper architecture, development, validation, and troubleshooting reference.
 
+### Create an offline folder for Codex-assisted installation
+
+To build the plugin and assemble a folder that can be handed directly to another Codex Desktop user, place Microsoft's x64 WebView2 Evergreen Standalone Installer at `runtime-downloads\MicrosoftEdgeWebView2RuntimeInstallerX64.exe`, then run:
+
+```powershell
+.\scripts\New-Distribution.ps1
+.\scripts\Test-Distribution.ps1
+```
+
+The generated `Distribution` folder contains the local Codex marketplace, complete plugin and skills, both release executables, pinned FFmpeg/FFprobe, the Microsoft-signed offline WebView2 installer, installation and diagnostics scripts, licenses, build metadata, and a full SHA-256 manifest. The recipient can unzip that folder, open it in Codex Desktop, and prompt: **Install this plugin for me.** Its packaged `AGENTS.md` directs Codex to verify the folder and perform an offline installation.
+
 ## Repository layout
 
 - `apps/desktop` — Tauri desktop companion and embedded reviewer

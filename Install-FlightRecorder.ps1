@@ -2,6 +2,7 @@
 param(
     [string]$Version = '0.2.0-preview.1',
     [string]$BundlePath,
+    [switch]$Offline,
     [switch]$SkipWebView2Install
 )
 
@@ -98,8 +99,18 @@ try {
 
     if (-not (Test-WebView2)) {
         if ($SkipWebView2Install) { throw 'WebView2 is missing and automatic installation was disabled.' }
-        $webViewInstaller = Join-Path $tempRoot 'MicrosoftEdgeWebview2Setup.exe'
-        Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webViewInstaller
+        $bundledWebViewInstaller = Join-Path $bundleRoot 'runtime\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+        if (Test-Path -LiteralPath $bundledWebViewInstaller) {
+            $webViewInstaller = $bundledWebViewInstaller
+            $expectedWebViewHash = $buildInfo.files.webview2_installer_sha256
+            if (-not $expectedWebViewHash) { throw 'Bundled WebView2 installer is missing its BUILDINFO checksum.' }
+            $actualWebViewHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $webViewInstaller).Hash.ToLowerInvariant()
+            if ($actualWebViewHash -ne $expectedWebViewHash.ToLowerInvariant()) { throw 'Bundled WebView2 installer checksum validation failed.' }
+        } else {
+            if ($Offline) { throw 'WebView2 is missing and the offline bundle does not contain its standalone installer.' }
+            $webViewInstaller = Join-Path $tempRoot 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webViewInstaller
+        }
         $signature = Get-AuthenticodeSignature -LiteralPath $webViewInstaller
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') { throw 'WebView2 bootstrapper signature validation failed.' }
         $process = Start-Process -FilePath $webViewInstaller -ArgumentList '/silent', '/install' -WindowStyle Hidden -Wait -PassThru
