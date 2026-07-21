@@ -29,49 +29,6 @@ Rust, Visual Studio, Python, and a system-wide FFmpeg installation are not requi
 
 ARM64, macOS, Linux, audio, automatic updates, and Authenticode signing are not currently supported.
 
-## Install Flight Recorder
-
-The easiest installation method is `FlightRecorder-Setup.exe`. Download the latest installer from the repository's [Releases](https://github.com/invisibleacropolis-ops/FlightRecorder/releases) area and run it as your normal Windows user.
-
-The installer provides the complete Flight Recorder application, Codex plugin, and pinned FFmpeg runtime. It also installs Microsoft Edge WebView2 Runtime if Windows does not already provide it. You do not need to install Rust, Visual Studio, Python, or FFmpeg separately. Codex Desktop or Codex CLI and a supported version of Windows are still required.
-
-During every installation, Flight Recorder verifies its bundled components, removes any prior `cdxvidext` or `flight-recorder` Codex installation and cache, replaces the staged runtime and marketplace, and installs `flight-recorder@flight-recorder` fresh. Before Codex installs that staged plugin, the installer recreates the plugin-owned `hooks/hooks.json` with a unique install identity in each command. This forces the four hooks under **From Plugins > flight-recorder** to receive a fresh trust decision without creating a second set under **User config**. The installer also removes accidental Flight Recorder user-config entries left by an earlier preview, while preserving hooks belonging to the user or other integrations. It does not change the machine `PATH`, and upgrades preserve compatible evidence and preferences under `%LOCALAPPDATA%\CdxVidExt`.
-
-After installation:
-
-1. Review and trust the Flight Recorder hooks in Codex.
-2. Restart Codex Desktop so its MCP configuration reloads.
-3. Open a new task.
-4. Open Flight Recorder, accept the privacy notice, select a monitor, and arm it.
-
-The two packaged executables are internal components, not separate installers: `cdxvidext-desktop.exe` owns capture and the reviewer, while `cdxvidext-bridge.exe` handles short-lived hooks, CLI commands, and MCP.
-
-## Upgrade and legacy replacement
-
-The installer detects installed plugins named `cdxvidext` or `flight-recorder`, stops their Flight Recorder processes, removes their Codex installation and cache, and installs a fresh `flight-recorder` copy. No Flight Recorder hook command is retained across the replacement. If installation fails, it attempts to restore the prior plugin IDs. It does not delete a development source folder or existing evidence.
-
-The following remain compatible:
-
-- `%LOCALAPPDATA%\CdxVidExt`
-- `preferences_v1`
-- existing databases, media paths, session IDs, snapshots, and encryption keys
-- the `cdxvidext` MCP server namespace and all nine public tools
-
-Existing evidence is enrolled in a `Default Session` without moving its files. New session metadata stays in `%LOCALAPPDATA%\CdxVidExt\index.sqlite3`; new flight and snapshot folders are namespaced by the selected session beneath the configured storage roots.
-
-## Uninstall
-
-Open **Settings > Apps > Installed apps**, find Flight Recorder, and select **Uninstall**. The standard uninstall removes the plugin-owned hooks with the plugin, cleans any accidental Flight Recorder user-config entries, and removes the application, plugin cache, local marketplace, and managed FFmpeg runtime. Hooks belonging to other integrations are preserved. Recordings, snapshots, preferences, and keys remain under `%LOCALAPPDATA%\CdxVidExt`.
-
-Source-built and manually packaged installations also include the PowerShell uninstaller. Permanent evidence removal is deliberately separate:
-
-```powershell
-.\Uninstall-FlightRecorder.ps1 -RemoveEvidence
-```
-
-The script requires an exact typed confirmation before deleting evidence.
-
-For support, run the installed `Collect-Diagnostics.ps1` tool. It creates a redacted ZIP with versions, hashes, encoder/runtime details, plugin state, and rolling logs—never recordings, snapshots, raw prompts, decrypted input, or encryption keys.
 
 ## Privacy and local security
 
