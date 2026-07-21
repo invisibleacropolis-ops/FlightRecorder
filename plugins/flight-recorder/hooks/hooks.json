@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "\"${PLUGIN_ROOT}/bin/cdxvidext-bridge.exe\" hook",
-            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\cdxvidext-bridge.exe\" hook",
+            "commandWindows": "& \"$env:PLUGIN_ROOT\\bin\\cdxvidext-bridge.exe\" hook",
             "timeout": 2,
             "statusMessage": "Starting armed flight recorder"
           }
@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "\"${PLUGIN_ROOT}/bin/cdxvidext-bridge.exe\" hook",
-            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\cdxvidext-bridge.exe\" hook",
+            "commandWindows": "& \"$env:PLUGIN_ROOT\\bin\\cdxvidext-bridge.exe\" hook",
             "timeout": 2
           }
         ]
@@ -33,7 +33,7 @@
           {
             "type": "command",
             "command": "\"${PLUGIN_ROOT}/bin/cdxvidext-bridge.exe\" hook",
-            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\cdxvidext-bridge.exe\" hook",
+            "commandWindows": "& \"$env:PLUGIN_ROOT\\bin\\cdxvidext-bridge.exe\" hook",
             "timeout": 2
           }
         ]
@@ -45,7 +45,7 @@
           {
             "type": "command",
             "command": "\"${PLUGIN_ROOT}/bin/cdxvidext-bridge.exe\" hook",
-            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\cdxvidext-bridge.exe\" hook",
+            "commandWindows": "& \"$env:PLUGIN_ROOT\\bin\\cdxvidext-bridge.exe\" hook",
             "timeout": 6,
             "statusMessage": "Finalizing recorded flight"
           }

@@ -424,7 +424,7 @@ Codex installs plugins into its plugin cache and runs the installed copy. Editin
 
 ### 7.1 Portable installed-root behavior
 
-The MCP configuration sets `cwd` to the installed plugin root and launches `./bin/cdxvidext-bridge.exe`. Windows hook commands use the quoted `%PLUGIN_ROOT%\bin\cdxvidext-bridge.exe` path supplied by Codex. Neither configuration contains a username, checkout, personal-marketplace, or fixed cache path.
+The MCP configuration sets `cwd` to the installed plugin root and launches `./bin/cdxvidext-bridge.exe`. Windows hook commands use PowerShell's call operator with the quoted `$env:PLUGIN_ROOT\bin\cdxvidext-bridge.exe` path supplied by Codex. Neither configuration contains a username, checkout, personal-marketplace, or fixed cache path.
 
 `Test-PortablePackage.ps1` performs a real Codex marketplace installation under a temporary `CODEX_HOME` whose path contains spaces, finds the installed cache copy, executes its bridge, and validates the installed hook definition. The clean-machine gate still validates these paths in Codex Desktop before publication.
 

@@ -32,7 +32,18 @@ try {
 
     $hook = Get-Content -Raw -LiteralPath (Join-Path $bridge.Directory.Parent.FullName 'hooks\hooks.json') | ConvertFrom-Json
     $command = $hook.hooks.UserPromptSubmit[0].hooks[0].commandWindows
-    if ($command -notmatch '%PLUGIN_ROOT%' -or $command -match 'docwh|C:\\GITHUB') { throw 'Installed hook is not plugin-root-relative.' }
+    if ($command -notmatch '\$env:PLUGIN_ROOT' -or $command -match 'docwh|C:\\GITHUB') { throw 'Installed Windows hook is not PowerShell-safe and plugin-root-relative.' }
+    $oldPluginRoot = $env:PLUGIN_ROOT
+    try {
+        $env:PLUGIN_ROOT = $bridge.Directory.Parent.FullName
+        $probeCommand = $command -replace '\s+hook(?:\s+.*)?$', ' unsupported-portability-probe'
+        $probe = & pwsh -NoLogo -NoProfile -NonInteractive -Command $probeCommand 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($probe -join '') -notmatch 'unknown bridge mode') {
+            throw 'Installed Windows hook command did not execute through PowerShell with PLUGIN_ROOT.'
+        }
+    } finally {
+        $env:PLUGIN_ROOT = $oldPluginRoot
+    }
     Write-Host 'Portable marketplace install passed from paths containing spaces.' -ForegroundColor Green
 } finally {
     $env:CODEX_HOME = $oldCodexHome

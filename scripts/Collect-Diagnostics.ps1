@@ -32,7 +32,7 @@ try {
                                 event = $eventProperty.Name
                                 install_id = if ($command -match '--flight-recorder-install-id\s+([0-9a-f-]{36})') { $Matches[1] } else { $null }
                                 version = if ($command -match '--flight-recorder-version\s+"([^"]+)"') { $Matches[1] } else { $null }
-                                plugin_root_relative = ($command -match '%PLUGIN_ROOT%|\$\{PLUGIN_ROOT\}')
+                                plugin_root_relative = ($command -match '%PLUGIN_ROOT%|\$\{PLUGIN_ROOT\}|\$env:PLUGIN_ROOT')
                             }
                         }
                     }
