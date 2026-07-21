@@ -94,3 +94,11 @@ The generated `Distribution` folder contains the local Codex marketplace, comple
 ## Licensing
 
 Flight Recorder source is MIT licensed. Release packages aggregate the separate GPLv3 FFmpeg 8.1.2 Essentials executables. Exact source, license, hash, and distributor information are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and are included in every package.
+
+## How Codex was used to build this
+
+Flight Recorder was built as a close collaboration between its human designer and Codex Desktop. The project began with a user-written proposal, product priorities, privacy boundaries, and repeated interface direction. Codex helped turn those decisions into feasibility specifications, Rust/Tauri/HTMX implementation work, Codex hooks and MCP integration, real Windows test procedures, troubleshooting, and engineering documentation.
+
+The development process also became a test of the product itself. Codex performed real computer-use tasks while Flight Recorder captured the screen and observed input. The user then reviewed those flights, identified missed actions, recording failures, confusing interface behavior, and evidence-navigation problems, and supplied concrete corrections for the next iteration. In that sense, Flight Recorder became part of its own development feedback loop.
+
+This was not a one-shot generated project. Product judgment and final acceptance remained human-led: the user chose the scope and design, enabled and trusted hooks, inspected recordings, and confirmed interactive behavior. Codex served as the implementation, research, debugging, testing, and documentation collaborator across multiple tasks. The Engineer's Manual preserves that technical context so future Codex tasks, other agents, and new contributors can continue the work without relying on the original conversation history.
